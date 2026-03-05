@@ -32,18 +32,11 @@ export function createOracleGraph(config: OracleConfig) {
   });
 
   workflow.addNode('executor', async (state: OracleState) => {
-    console.log(`⚙️  Executor: Running subtask ${state.currentSubtask + 1}/${state.subtasks.length}`);
     const subtask = state.subtasks[state.currentSubtask];
-    const result = await executorAgent.run(subtask, config);
-    
-    const newResults = { ...state.results, [subtask.id]: result };
-    const nextSubtask = state.currentSubtask + 1;
-    
-    return {
-      ...state,
-      results: newResults,
-      currentSubtask: nextSubtask,
-    };
+    const label = subtask ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}` : 'concluído';
+    console.log(`⚙️  Executor: ${label}`);
+    // Sprint 3: executorAgent é uma função LangGraph nativa com tool-calling loop
+    return executorAgent(state);
   });
 
   workflow.addNode('reviewer', async (state: OracleState) => {
