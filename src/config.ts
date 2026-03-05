@@ -1,13 +1,21 @@
 /**
  * ORACLE-OS Configuration
  * Central config for agents, tools, and runtime
+ * Suporta múltiplos providers: Anthropic, Groq, Gemini
  */
+
+import { DEFAULT_MODELS } from './models/model-registry';
+
+export interface AgentModelConfig {
+  modelId: string;    // ID do MODEL_CATALOG
+  temperature: number;
+}
 
 export interface OracleConfig {
   agents: {
-    planner: { model: string; temperature: number };
-    executor: { model: string; temperature: number };
-    reviewer: { model: string; temperature: number };
+    planner: AgentModelConfig;
+    executor: AgentModelConfig;
+    reviewer: AgentModelConfig;
   };
   tools: {
     mcp: { enabled: boolean; servers: string[] };
@@ -22,13 +30,21 @@ export interface OracleConfig {
     enabled: boolean;
     logLevel: string;
   };
+  ui: {
+    allowModelSwitching: boolean; // habilita seletor no frontend
+    defaultUserModel: string;     // modelo padrão na UI
+  };
 }
 
 export const config: OracleConfig = {
   agents: {
-    planner: { model: 'anthropic/claude-3-7-sonnet', temperature: 0.7 },
-    executor: { model: 'anthropic/claude-3-7-sonnet', temperature: 0.2 },
-    reviewer: { model: 'anthropic/claude-3-7-sonnet', temperature: 0.3 },
+    // Estratégia híbrida: usa o melhor modelo disponível por papel
+    // Planner: raciocínio complexo → Claude (pago) ou Llama (grátis)
+    planner: { modelId: DEFAULT_MODELS.planner, temperature: 0.7 },
+    // Executor: velocidade e volume → Groq (grátis)
+    executor: { modelId: DEFAULT_MODELS.executor, temperature: 0.2 },
+    // Reviewer: validação → Gemini Flash (grátis)
+    reviewer: { modelId: DEFAULT_MODELS.reviewer, temperature: 0.3 },
   },
   tools: {
     mcp: { enabled: true, servers: ['github', 'filesystem', 'browser'] },
@@ -42,5 +58,9 @@ export const config: OracleConfig = {
   monitoring: {
     enabled: true,
     logLevel: 'info',
+  },
+  ui: {
+    allowModelSwitching: true,
+    defaultUserModel: 'llama-3.3-70b', // grátis como padrão
   },
 };
