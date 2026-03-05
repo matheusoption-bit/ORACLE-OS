@@ -1,0 +1,36 @@
+{
+  "name": "oracle-os",
+  "version": "0.1.0",
+  "description": "Manus-inspired agentic dev OS for private MVP",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "bootstrap": "node bootstrap/oracle-os-bootstrap.js",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "vitest",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "keywords": ["agents", "ai", "langgraph", "mcp", "e2b"],
+  "author": "Matheus Petry",
+  "license": "MIT",
+  "dependencies": {
+    "@langchain/anthropic": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "zod": "^3.23.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
