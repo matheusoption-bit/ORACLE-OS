@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "bootstrap": "node bootstrap/oracle-os-bootstrap.js",
-    "dev": "node --max-old-space-size=4096 ./node_modules/tsx/dist/cli.mjs watch src/index.ts",
-    "build": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup src/index.ts --format esm --dts-resolve --out-dir dist",
     "typecheck": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc --noEmit",
+    "start": "node dist/index.js",
     "test": "vitest",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts"
@@ -32,6 +33,7 @@
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
+    "tsup": "^8.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.0.0"
