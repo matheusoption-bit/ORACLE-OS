@@ -23,9 +23,10 @@ export interface OracleState {
   task: string;
   subtasks: Subtask[];
   currentSubtask: number;
-  results: Record<string, any>;
+  results: Record<string, unknown>;
   errors: Error[];
-  reviewStatus: "pending" | "approved" | "rejected";
+  reviewStatus: 'pending' | 'approved' | 'rejected' | 'needs_revision';
+  revisionNotes?: string; // feedback do Reviewer para o Executor re-executar
   iterationCount: number;
 }
 

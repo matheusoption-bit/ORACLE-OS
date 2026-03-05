@@ -1,12 +1,19 @@
 /**
- * ORACLE-OS Reviewer Agent
- * Validates outputs and determines if iteration is needed
+ * ORACLE-OS Reviewer Agent — Sprint 4
+ * Valida resultados dos executors, suporta needs_revision e force-approve
+ * Função LangGraph nativa com output estruturado Zod
  */
 
-import { ChatAnthropic } from '@langchain/anthropic';
 import { z } from 'zod';
-import { OracleState } from '../state/oracle-state';
-import { OracleConfig } from '../config';
+import { HumanMessage } from '@langchain/core/messages';
+import { createModel } from '../models/model-registry.js';
+import { config } from '../config.js';
+import { OracleState } from '../state/oracle-state.js';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+// ─── Schemas Zod ──────────────────────────────────────────────────────────────
 
 const IssueSchema = z.object({
   severity: z.enum(['critical', 'major', 'minor']),
@@ -15,55 +22,112 @@ const IssueSchema = z.object({
 });
 
 const ReviewSchema = z.object({
-  status: z.enum(['approved', 'rejected']),
-  issues: z.array(IssueSchema),
-  nextAction: z.enum(['complete', 'iterate', 'escalate']),
+  status: z.enum(['approved', 'rejected', 'needs_revision']),
+  issues: z.array(IssueSchema).default([]),
+  revisionNotes: z.string().optional(),
   summary: z.string(),
 });
 
-export const reviewerAgent = {
-  async run(state: OracleState, config: OracleConfig) {
-    const model = new ChatAnthropic({
-      modelName: config.agents.reviewer.model,
-      temperature: config.agents.reviewer.temperature,
-    });
+export type Review = z.infer<typeof ReviewSchema>;
+export type ReviewIssue = z.infer<typeof IssueSchema>;
 
-    const structuredModel = model.withStructuredOutput(ReviewSchema);
+// ─── Carrega prompt template ──────────────────────────────────────────────────
 
-    const resultsJson = JSON.stringify(state.results, null, 2);
+function loadReviewerPrompt(): string {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dir = dirname(__filename);
+    return readFileSync(resolve(__dir, '../../prompts/agents/reviewer-prompt.md'), 'utf-8');
+  } catch {
+    return `Você é o ORACLE Reviewer. Avalie os resultados dos Executors e decida:
+- approved: tudo concluído e funcional
+- needs_revision: há problemas corrigíveis — forneça revisionNotes específicos
+- rejected: falha grave ou estrutural`;
+  }
+}
 
-    const prompt = `You are a senior code reviewer in the ORACLE-OS system.
+// ─── Força aprovação após max tentativas ──────────────────────────────────────
 
-Evaluate this work:
+function buildForceApproveResult(): Partial<OracleState> {
+  console.warn('⚠️  Reviewer: Máximo de tentativas atingido — forçando aprovação com warnings.');
+  return {
+    reviewStatus: 'approved',
+    revisionNotes: '[AUTO-APROVADO] Máximo de 3 iterações atingido. Revisar manualmente.',
+    iterationCount: 3,
+  };
+}
 
-<original_task>
+// ─── Função principal — nó LangGraph ─────────────────────────────────────────
+
+/**
+ * reviewerAgent — nó LangGraph
+ * Analisa state.results e state.errors, retorna atualização do estado com reviewStatus.
+ */
+export async function reviewerAgent(
+  state: OracleState
+): Promise<Partial<OracleState>> {
+  console.log(`🔍 Reviewer: Avaliando resultados (tentativa ${state.iterationCount + 1}/3)...`);
+
+  // Force-approve após 3 tentativas — sem chamar o LLM
+  if (state.iterationCount >= 3) {
+    return buildForceApproveResult();
+  }
+
+  const model = createModel({
+    modelId: config.agents.reviewer.modelId,
+    temperature: config.agents.reviewer.temperature,
+  });
+
+  const structuredModel = model.withStructuredOutput(ReviewSchema);
+  const systemPrompt = loadReviewerPrompt();
+
+  // Serializa resultados e erros de forma segura (sem circular refs)
+  const resultsJson = JSON.stringify(state.results, null, 2);
+  const errorsJson = state.errors.length > 0
+    ? JSON.stringify(state.errors.map((e) => ({ message: e.message, name: e.name })), null, 2)
+    : '[]';
+
+  // Sumário dos subtasks para contexto
+  const subtasksSummary = state.subtasks
+    .map((s) => `- [${s.id}] ${s.title} (${s.type}, prioridade ${s.priority})`)
+    .join('\n');
+
+  const userPrompt = `${systemPrompt}
+
+<tarefa_original>
 ${state.task}
-</original_task>
+</tarefa_original>
 
-<subtask_results>
+<subtasks_planejados>
+${subtasksSummary}
+</subtasks_planejados>
+
+<resultados_dos_executors>
 ${resultsJson}
-</subtask_results>
+</resultados_dos_executors>
 
-<validation_criteria>
-- All subtasks completed successfully
-- Outputs meet task requirements
-- Code quality: proper types, error handling, no hardcoded secrets
-- Security: no vulnerabilities, safe dependencies
-- Tests: validation criteria satisfied
-</validation_criteria>
+<erros_capturados>
+${errorsJson}
+</erros_capturados>
 
-<iteration_count>
-${state.iterationCount} / 3 attempts
-</iteration_count>
+<contexto_iteracao>
+Tentativa: ${state.iterationCount + 1} de 3
+${state.revisionNotes ? `Notas da revisão anterior: ${state.revisionNotes}` : ''}
+</contexto_iteracao>
 
-Provide a structured review with:
-- Status: approved (ready to ship) or rejected (needs fixes)
-- Issues: list critical/major/minor problems
-- Next action: complete, iterate (fix issues), or escalate (manual intervention needed)
-- Summary: brief explanation of decision`;
+Avalie o trabalho produzido e retorne sua decisão estruturada.`;
 
-    const result = await structuredModel.invoke(prompt);
+  const review = await structuredModel.invoke([new HumanMessage(userPrompt)]);
 
-    return result;
-  },
-};
+  // Extrai erros críticos para state.errors (mantém compatibilidade)
+  const criticalErrors = review.issues
+    .filter((i) => i.severity === 'critical')
+    .map((i) => new Error(`[CRÍTICO] ${i.description} → Correção: ${i.suggestedFix}`));
+
+  return {
+    reviewStatus: review.status,
+    revisionNotes: review.revisionNotes,
+    errors: criticalErrors.length > 0 ? criticalErrors : state.errors,
+    iterationCount: state.iterationCount + 1,
+  };
+}
