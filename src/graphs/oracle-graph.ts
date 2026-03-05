@@ -4,11 +4,11 @@
  */
 
 import { StateGraph, END, START } from '@langchain/langgraph';
-import { OracleState, Subtask } from '../state/oracle-state';
-import { plannerAgent } from '../agents/planner';
-import { executorAgent } from '../agents/executor';
-import { reviewerAgent } from '../agents/reviewer';
-import { OracleConfig } from '../config';
+import { OracleState } from '../state/oracle-state.js';
+import { plannerAgent } from '../agents/planner.js';
+import { executorAgent } from '../agents/executor.js';
+import { reviewerAgent } from '../agents/reviewer.js';
+import { OracleConfig } from '../config.js';
 
 export function createOracleGraph(config: OracleConfig) {
   // Define state transitions
@@ -25,14 +25,10 @@ export function createOracleGraph(config: OracleConfig) {
   });
 
   // Add nodes
+  // Sprint 2: plannerAgent agora é uma função LangGraph nativa — não precisa de wrapper
   workflow.addNode('planner', async (state: OracleState) => {
-    console.log('🧠 Planner: Decomposing task...');
-    const plan = await plannerAgent.run(state, config);
-    return {
-      ...state,
-      subtasks: plan.subtasks,
-      currentSubtask: 0,
-    };
+    console.log('🧠 Planner: Decompondo tarefa...');
+    return plannerAgent(state);
   });
 
   workflow.addNode('executor', async (state: OracleState) => {

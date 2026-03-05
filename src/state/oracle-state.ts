@@ -3,13 +3,19 @@
  * Defines the shared state passed between agents
  */
 
+export type SubtaskType = "code" | "file" | "search" | "review" | "other";
+
 export interface Subtask {
   id: string;
+  title: string;
   description: string;
-  assignedAgent: 'frontend' | 'backend' | 'devops' | 'data' | 'security';
-  dependencies: string[];
-  estimatedDuration: number; // minutes
-  tools: string[]; // MCP tool names
+  type: SubtaskType;
+  priority: number; // 1 (crítico) a 5 (baixo)
+  dependsOn: string[]; // IDs de subtasks pré-requisito (Sprint 2)
+  assignedAgent: "frontend" | "backend" | "devops" | "data" | "security";
+  dependencies: string[]; // alias retrocompatível com executor/reviewer
+  estimatedDuration: number; // minutos
+  tools: string[]; // nomes de ferramentas MCP
   validationCriteria: string;
 }
 
@@ -19,7 +25,7 @@ export interface OracleState {
   currentSubtask: number;
   results: Record<string, any>;
   errors: Error[];
-  reviewStatus: 'pending' | 'approved' | 'rejected';
+  reviewStatus: "pending" | "approved" | "rejected";
   iterationCount: number;
 }
 
@@ -29,6 +35,6 @@ export const createInitialState = (task: string): OracleState => ({
   currentSubtask: 0,
   results: {},
   errors: [],
-  reviewStatus: 'pending',
+  reviewStatus: "pending",
   iterationCount: 0,
 });

@@ -1,52 +1,87 @@
 /**
- * ORACLE-OS Planner Agent
- * Decomposes tasks into executable subtasks
+ * ORACLE-OS Planner Agent — Sprint 2
+ * Decompõe tarefas em subtasks estruturadas com output Zod
+ * Compatível com nó LangGraph e fn plannerAgent(state)
  */
 
-import { ChatAnthropic } from '@langchain/anthropic';
 import { z } from 'zod';
-import { OracleState, Subtask } from '../state/oracle-state';
-import { OracleConfig } from '../config';
+import { HumanMessage } from '@langchain/core/messages';
+import { createModel } from '../models/model-registry.js';
+import { config } from '../config.js';
+import { OracleState, Subtask } from '../state/oracle-state.js';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
 
-const SubtaskSchema = z.object({
+// ─── Zod Schemas ──────────────────────────────────────────────────────────────
+
+export const SubtaskSchema = z.object({
   id: z.string(),
+  title: z.string(),
   description: z.string(),
+  type: z.enum(['code', 'file', 'search', 'review', 'other']),
+  priority: z.number().min(1).max(5),
+  dependsOn: z.array(z.string()).default([]),
   assignedAgent: z.enum(['frontend', 'backend', 'devops', 'data', 'security']),
-  dependencies: z.array(z.string()),
-  estimatedDuration: z.number(),
-  tools: z.array(z.string()),
-  validationCriteria: z.string(),
+  dependencies: z.array(z.string()).default([]),
+  estimatedDuration: z.number().default(15),
+  tools: z.array(z.string()).default([]),
+  validationCriteria: z.string().default(''),
 });
 
-const PlanSchema = z.object({
+export const PlanSchema = z.object({
   subtasks: z.array(SubtaskSchema),
   executionPlan: z.enum(['sequential', 'parallel', 'mixed']),
 });
 
-export const plannerAgent = {
-  async run(state: OracleState, config: OracleConfig) {
-    const model = new ChatAnthropic({
-      modelName: config.agents.planner.model,
-      temperature: config.agents.planner.temperature,
-    });
+export type Plan = z.infer<typeof PlanSchema>;
+export type SubtaskOutput = z.infer<typeof SubtaskSchema>;
 
-    const structuredModel = model.withStructuredOutput(PlanSchema);
+// ─── Carrega prompt template ──────────────────────────────────────────────────
 
-    const prompt = `You are a senior technical architect in the ORACLE-OS system.
+function loadPromptTemplate(): string {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const promptPath = resolve(__dirname, '../../prompts/agents/planner-prompt.md');
+    return readFileSync(promptPath, 'utf-8');
+  } catch {
+    // Fallback inline caso o arquivo não exista no ambiente de build
+    return `Você é um arquiteto técnico sênior no sistema ORACLE-OS.
+Decomponha a tarefa fornecida em subtasks atômicas, testáveis e executáveis.
+Cada subtask deve ser completável em menos de 30 minutos.
+Prioridade: 1 = crítico, 5 = baixo.
+Retorne um plano estruturado em JSON.`;
+  }
+}
 
-Decompose this task into atomic, testable subtasks:
+// ─── Função principal — assinatura LangGraph ──────────────────────────────────
+
+/**
+ * plannerAgent — nó LangGraph
+ * Recebe o estado compartilhado e retorna atualização de estado com subtasks.
+ */
+export async function plannerAgent(
+  state: OracleState
+): Promise<Partial<OracleState>> {
+  const model = createModel({
+    modelId: config.agents.planner.modelId,
+    temperature: config.agents.planner.temperature,
+  });
+
+  const structuredModel = model.withStructuredOutput(PlanSchema);
+
+  const systemPrompt = loadPromptTemplate();
+
+  const userMessage = `${systemPrompt}
 
 <task>
 ${state.task}
 </task>
 
-<guidelines>
-- Each subtask should be completable in <30 minutes
-- Assign to the most appropriate agent (frontend, backend, devops, data, security)
-- Specify MCP tools needed (file_*, shell_*, github_*, browser_*, db_*)
-- Define clear validation criteria
-- Consider dependencies between subtasks
-</guidelines>
+<context>
+${state.task ? 'Nenhum contexto RAG disponível neste momento.' : ''}
+</context>
 
 <available_tools>
 - file_read, file_write, file_list
@@ -56,10 +91,28 @@ ${state.task}
 - db_query, db_insert
 </available_tools>
 
-Output a structured plan with subtasks and execution strategy.`;
+Retorne um plano JSON completo com todos os campos obrigatórios.`;
 
-    const result = await structuredModel.invoke(prompt);
+  const result = await structuredModel.invoke([
+    new HumanMessage(userMessage),
+  ]);
 
-    return result;
+  // Mapeia dependsOn → dependencies para retrocompatibilidade
+  const subtasks: Subtask[] = result.subtasks.map((s: SubtaskOutput) => ({
+    ...s,
+    dependencies: s.dependsOn,
+  }));
+
+  return {
+    subtasks,
+    currentSubtask: 0,
+  };
+}
+
+// ─── Wrapper retrocompatível (usado por testes legados) ───────────────────────
+
+export const plannerAgentLegacy = {
+  async run(state: OracleState) {
+    return plannerAgent(state);
   },
 };
