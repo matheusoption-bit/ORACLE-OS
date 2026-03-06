@@ -11,7 +11,7 @@ export default function Workbench() {
   const [activeTab, setActiveTab] = useState<Tab>('preview');
   const { files, activeFile, logs, taskStatus } = useOracleStore();
 
-  const fileContent = activeFile ? files[activeFile] : '// Arquivo vazio ou aguardando criação...';
+  const fileContent = activeFile && files[activeFile] ? files[activeFile].content : '// Aguardando criação de arquivo…';
 
   return (
     <div className="flex flex-col h-full bg-[#111111]">
@@ -53,7 +53,7 @@ export default function Workbench() {
             {/* Num cenário real criaríamos um Blob object / proxy p renderizar o HTML gerado */}
             {files['index.html'] ? (
               <iframe 
-                srcDoc={files['index.html']}
+              srcDoc={files['index.html']?.content}
                 className="w-full h-full border rounded shadow-lg"
                 sandbox="allow-scripts"
               />
