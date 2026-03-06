@@ -1,4 +1,4 @@
-// ─── ORACLE-OS · Tipos TypeScript Completos ─────────────────────────────────
+// ─── ORACLE-OS · Tipos TypeScript Completos — Sprint 10 ───────────────────────
 
 // Tipos existentes mantidos para compatibilidade
 export interface Subtask {
@@ -33,6 +33,17 @@ export type ChatMessage = {
   streaming?: boolean;
 };
 
+/** Dados de custo parcial emitidos em tempo real pelo backend */
+export interface AgentCostData {
+  taskId: string;
+  totalCostUSD: number;
+  tokensPlanner: number;
+  tokensExecutor: number;
+  tokensReviewer: number;
+  totalTokens: number;
+  isFinal?: boolean;
+}
+
 export type OracleEvent =
   | { type: 'task:started'; taskId: string; task: string }
   | { type: 'plan:created'; subtasks: Subtask[] }
@@ -45,7 +56,10 @@ export type OracleEvent =
   | { type: 'skill:saved'; skillId: string }
   | { type: 'task:completed'; metrics: TaskMetrics }
   | { type: 'error'; message: string }
-  | { type: 'token'; token: string };
+  | { type: 'token'; token: string }
+  // Sprint 10: Novos eventos
+  | { type: 'agent:cost'; taskId: string; totalCostUSD: number; tokensPlanner: number; tokensExecutor: number; tokensReviewer: number; totalTokens: number; isFinal?: boolean }
+  | { type: 'user:message:received'; message: string };
 
 // ─── Novos tipos: Modelos de IA ─────────────────────────────────────────────
 

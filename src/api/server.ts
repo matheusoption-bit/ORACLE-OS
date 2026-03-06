@@ -5,8 +5,6 @@ import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
 import { OracleBridge } from './oracle-bridge.js';
 
-// TODO: Importar as métricas quando estiverem criadas ou mockar
-
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -15,7 +13,6 @@ app.use(cors());
 app.use(express.json());
 
 // Única instancia da bridge por enquanto.
-// Em cenários multi-user, teríamos uma bridge por WebSocket ou taskId.
 const bridge = new OracleBridge();
 
 // Eventos da Bridge repassados pro WebSocket
@@ -31,6 +28,12 @@ bridge.on('task:completed', (data) => broadcast({ type: 'task:completed', ...dat
 bridge.on('error', (data) => broadcast({ type: 'error', ...data }));
 bridge.on('token', (data) => broadcast({ type: 'token', ...data }));
 
+// Sprint 10: Evento de custo parcial em tempo real
+bridge.on('agent:cost', (data) => broadcast({ type: 'agent:cost', ...data }));
+
+// Sprint 10: Confirmação de recebimento de mensagem do usuário
+bridge.on('user:message:received', (data) => broadcast({ type: 'user:message:received', ...data }));
+
 function broadcast(message: any) {
   const payload = JSON.stringify(message);
   wss.clients.forEach((client: WebSocket) => {
@@ -42,6 +45,21 @@ function broadcast(message: any) {
 
 wss.on('connection', (ws: WebSocket) => {
   console.log('[WebSocket] Client connected');
+
+  // Sprint 10: Escuta mensagens do usuário via WebSocket
+  ws.on('message', (data) => {
+    try {
+      const parsed = JSON.parse(data.toString());
+
+      if (parsed.type === 'user:message' && parsed.content) {
+        console.log(`[WebSocket] Mensagem do usuário: ${parsed.content.substring(0, 100)}`);
+        bridge.handleUserMessage(parsed.content);
+      }
+    } catch (e) {
+      console.warn('[WebSocket] Mensagem inválida recebida:', e);
+    }
+  });
+
   ws.on('close', () => console.log('[WebSocket] Client disconnected'));
 });
 
@@ -69,7 +87,6 @@ app.post('/api/task', async (req, res) => {
  * Demais endpoints requisitados
  */
 app.get('/api/tasks', (req, res) => {
-  // TODO: Conectar com monitoring/metrics.ts
   res.json({ tasks: [] });
 });
 

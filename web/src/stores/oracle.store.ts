@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Subtask, ChatMessage, TaskMetrics } from '@/types/oracle.types';
+import type { Subtask, ChatMessage, TaskMetrics, AgentCostData } from '@/types/oracle.types';
 
 // ─── Tipos do Store ────────────────────────────────────────────────────────
 
@@ -30,6 +30,16 @@ export interface RecentTaskEntry {
   createdAt: string;
 }
 
+/** Métricas parciais em tempo real (Sprint 10) */
+export interface LiveMetrics {
+  totalCostUSD: number;
+  tokensPlanner: number;
+  tokensExecutor: number;
+  tokensReviewer: number;
+  totalTokens: number;
+  lastUpdated: string;
+}
+
 // ─── Interface do Store ────────────────────────────────────────────────────
 
 interface OracleStore {
@@ -46,6 +56,7 @@ interface OracleStore {
   activeFile: string | null;
   logs: string[];
   metrics: TaskMetrics | null;
+  liveMetrics: LiveMetrics | null;
   error: string | null;
 
   // ── UI state ──
@@ -85,6 +96,9 @@ interface OracleStore {
 
   // ── Actions: Logs ──
   appendLog: (log: string) => void;
+
+  // ── Actions: Live Metrics (Sprint 10) ──
+  updateLiveMetrics: (data: AgentCostData) => void;
 }
 
 // ─── Implementação ─────────────────────────────────────────────────────────
@@ -105,6 +119,7 @@ export const useOracleStore = create<OracleStore>()(
       activeFile: null,
       logs: [],
       metrics: null,
+      liveMetrics: null,
       error: null,
       wsStatus: 'disconnected',
       selectedModel: 'claude-3-5-sonnet',
@@ -128,6 +143,7 @@ export const useOracleStore = create<OracleStore>()(
           activeFile: null,
           logs: [],
           metrics: null,
+          liveMetrics: null,
           error: null,
         });
         get().appendMessage({ role: 'system', content: `🔮 Iniciando: ${task}` });
@@ -148,7 +164,6 @@ export const useOracleStore = create<OracleStore>()(
 
       completeSubtask: (index, output) => {
         set({ currentSubtask: index + 1 });
-        // Finaliza qualquer streaming ativo antes de adicionar a mensagem completa
         get().finalizeStreaming();
         if (output) {
           get().appendMessage({ role: 'executor', content: output });
@@ -165,18 +180,29 @@ export const useOracleStore = create<OracleStore>()(
       },
 
       completeTask: (metrics) => {
-        const { taskId, taskPrompt, taskHistory } = get();
+        const { taskId, taskPrompt, taskHistory, liveMetrics } = get();
+
+        // Mescla métricas finais com dados em tempo real
+        const mergedMetrics: TaskMetrics = {
+          ...metrics,
+          tokensPlanner: metrics.tokensPlanner ?? liveMetrics?.tokensPlanner,
+          tokensExecutor: metrics.tokensExecutor ?? liveMetrics?.tokensExecutor,
+          tokensReviewer: metrics.tokensReviewer ?? liveMetrics?.tokensReviewer,
+          tokensUsed: metrics.tokensUsed ?? liveMetrics?.totalTokens,
+          cost: metrics.cost ?? liveMetrics?.totalCostUSD,
+        };
+
         set({
           taskStatus: 'completed',
-          metrics,
+          metrics: mergedMetrics,
           taskHistory: [
             { id: taskId!, prompt: taskPrompt, status: 'completed', createdAt: new Date().toISOString() },
-            ...taskHistory.slice(0, 19), // máximo 20 entradas
+            ...taskHistory.slice(0, 19),
           ],
         });
         get().appendMessage({
           role: 'system',
-          content: `✅ Tarefa concluída em ${metrics.durationMs ? ((metrics.durationMs / 1000).toFixed(1) + 's') : 'N/A'}`,
+          content: `✅ Tarefa concluída em ${mergedMetrics.durationMs ? ((mergedMetrics.durationMs / 1000).toFixed(1) + 's') : 'N/A'}`,
         });
       },
 
@@ -194,6 +220,7 @@ export const useOracleStore = create<OracleStore>()(
           activeFile: null,
           logs: [],
           metrics: null,
+          liveMetrics: null,
           error: null,
         }),
 
@@ -217,7 +244,6 @@ export const useOracleStore = create<OracleStore>()(
           const messages = [...state.messages];
           const last = messages[messages.length - 1];
           if (last?.streaming) {
-            // Muta de forma imutável
             messages[messages.length - 1] = { ...last, content: last.content + token };
           } else {
             messages.push({
@@ -265,10 +291,23 @@ export const useOracleStore = create<OracleStore>()(
         set((state) => ({
           logs: [...state.logs.slice(-499), `[${new Date().toLocaleTimeString()}] ${log}`],
         })),
+
+      // ── Live Metrics (Sprint 10) ──────────────────────────────────────────
+
+      updateLiveMetrics: (data: AgentCostData) =>
+        set({
+          liveMetrics: {
+            totalCostUSD: data.totalCostUSD,
+            tokensPlanner: data.tokensPlanner,
+            tokensExecutor: data.tokensExecutor,
+            tokensReviewer: data.tokensReviewer,
+            totalTokens: data.totalTokens,
+            lastUpdated: new Date().toISOString(),
+          },
+        }),
     }),
     {
       name: 'oracle-os-storage',
-      // Persiste apenas o histórico de tasks e preferências — sem dados sensíveis
       partialize: (state) => ({
         taskHistory: state.taskHistory,
         selectedModel: state.selectedModel,

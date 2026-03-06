@@ -17,6 +17,7 @@ const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000]; // exponencial
 export interface UseOracleWebSocketReturn {
   status: WsStatus;
   send: (data: object) => void;
+  sendUserMessage: (content: string) => void;
   reconnect: () => void;
 }
 
@@ -41,6 +42,7 @@ export function useOracleWebSocket(taskId: string): UseOracleWebSocketReturn {
     appendMessage,
     appendLog,
     setWsStatus,
+    updateLiveMetrics,
   } = store;
 
   // ── Mapeamento de eventos → actions ─────────────────────────────────────
@@ -65,7 +67,6 @@ export function useOracleWebSocket(taskId: string): UseOracleWebSocketReturn {
           break;
 
         case 'file:created': {
-          // O evento file:created tem path e content nos tipos
           const fe = event as Extract<OracleEvent, { type: 'file:created' }>;
           upsertFile(fe.path, fe.content);
           appendLog(`[Sistema] Arquivo: ${fe.path}`);
@@ -114,6 +115,24 @@ export function useOracleWebSocket(taskId: string): UseOracleWebSocketReturn {
           appendLog(`[Sistema] Skill salva: ${event.skillId}`);
           break;
 
+        // Sprint 10: Métricas em tempo real
+        case 'agent:cost':
+          updateLiveMetrics({
+            taskId: event.taskId,
+            totalCostUSD: event.totalCostUSD,
+            tokensPlanner: event.tokensPlanner,
+            tokensExecutor: event.tokensExecutor,
+            tokensReviewer: event.tokensReviewer,
+            totalTokens: event.totalTokens,
+            isFinal: event.isFinal,
+          });
+          break;
+
+        // Sprint 10: Confirmação de mensagem do usuário
+        case 'user:message:received':
+          appendLog(`[Sistema] Mensagem do usuário recebida pelo agente.`);
+          break;
+
         default:
           appendLog(`[WS] Evento desconhecido: ${(event as OracleEvent).type}`);
       }
@@ -121,7 +140,7 @@ export function useOracleWebSocket(taskId: string): UseOracleWebSocketReturn {
     [
       initTask, setPlan, startSubtask, completeSubtask, upsertFile,
       appendToken, finalizeStreaming, setStatus, setError, completeTask,
-      appendMessage, appendLog,
+      appendMessage, appendLog, updateLiveMetrics,
     ]
   );
 
@@ -189,7 +208,7 @@ export function useOracleWebSocket(taskId: string): UseOracleWebSocketReturn {
       isMountedRef.current = false;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) {
-        wsRef.current.onclose = null; // Evita reconectar no unmount
+        wsRef.current.onclose = null;
         wsRef.current.close();
       }
       setWsStatus('disconnected');
@@ -207,6 +226,14 @@ export function useOracleWebSocket(taskId: string): UseOracleWebSocketReturn {
     }
   }, [appendLog]);
 
+  /**
+   * Envia uma mensagem do usuário para o backend via WebSocket.
+   * O backend pode usar isso para intervenção humano-agente.
+   */
+  const sendUserMessage = useCallback((content: string) => {
+    send({ type: 'user:message', content });
+  }, [send]);
+
   const reconnect = useCallback(() => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     if (wsRef.current) {
@@ -220,6 +247,7 @@ export function useOracleWebSocket(taskId: string): UseOracleWebSocketReturn {
   return {
     status: store.wsStatus,
     send,
+    sendUserMessage,
     reconnect,
   };
 }
