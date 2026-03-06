@@ -1,6 +1,6 @@
 # ORACLE-OS Agent System
 
-> **Multi-agent orchestration design and agent specifications**
+> **Multi-agent orchestration design and agent specifications (Sprint 10)**
 
 ---
 
@@ -10,16 +10,16 @@
 
 **Responsibility:** Task decomposition and orchestration strategy.
 
-**Input:**
+**Input (State):**
 ```typescript
 {
   task: string;              // User's high-level request
   context: string[];         // Retrieved from RAG (similar past tasks)
-  availableAgents: string[]; // Executor agents online
+  shortTermMemory: string[]; // Context from previous agents in the same loop
 }
 ```
 
-**Output:**
+**Output (State Update):**
 ```typescript
 {
   subtasks: [
@@ -28,90 +28,55 @@
       description: string;
       assignedAgent: 'frontend' | 'backend' | 'devops' | ...;
       dependencies: string[];  // IDs of prerequisite subtasks
-      estimatedDuration: number; // minutes
+      validationCriteria: string;
     }
   ];
-  executionPlan: 'sequential' | 'parallel' | 'mixed';
 }
 ```
 
-**Prompt Template:**
+**Prompt Snippet:**
 ```
-You are a senior technical architect. Decompose this task:
+<task>{user_task}</task>
 
-<task>
-{user_task}
-</task>
+<similar_tasks>{rag_context}</similar_tasks>
 
-<similar_tasks>
-{rag_context}
-</similar_tasks>
+<short_term_memory>
+Context from previous agents in this cycle:
+[1] [Reviewer] Attempt 1/3 → needs_revision. Notes: The login button is not centered.
+</short_term_memory>
 
-Output a JSON plan with subtasks, assigned agents, and execution order.
-Each subtask should be:
-- Atomic (completable in <30 min)
-- Testable (has clear success criteria)
-- Tool-compatible (uses available MCP/E2B tools)
+Output a JSON plan with subtasks...
 ```
 
 ---
 
 ### 2. EXECUTOR Agents
 
-#### 2.1 Frontend Agent
+**Responsibility:** Execute a single, atomic subtask using a specialized toolset.
 
-**Specialty:** React, Next.js, Tailwind, component libraries.
+**New Feature: Auto-Correction**
 
-**Tools:**
-- `file_*`: Read/write components
-- `shell_npm`: Install dependencies
-- `browser_*`: Visual regression testing
+- The `runToolLoop` now intelligently detects common execution errors from `shell_exec` (e.g., `command not found`, `module not found`).
+- When a known error is detected, the Executor automatically attempts a corrective action (e.g., `npm install <missing_module>`, `pip install <package>`).
+- This process is logged and retried up to 3 times per subtask, reducing failures from simple environment issues.
 
-**Subtask Example:**
-```json
+**Input (State):**
+```typescript
 {
-  "id": "FE-001",
-  "description": "Create a responsive navigation bar with dark mode toggle",
-  "tools": ["file_write", "shell_npm"],
-  "validation": "Component renders without errors, passes accessibility audit"
+  subtask: Subtask;          // The specific subtask to execute
+  shortTermMemory: string[]; // Context from Planner and previous Executors
 }
 ```
 
-#### 2.2 Backend Agent
-
-**Specialty:** Node.js, Python, APIs, databases.
-
-**Tools:**
-- `file_*`: Read/write server code
-- `shell_*`: Run migrations, start servers
-- `db_*`: Query/modify databases
-
-**Subtask Example:**
-```json
+**Output (Result):**
+```typescript
 {
-  "id": "BE-001",
-  "description": "Implement POST /api/users endpoint with validation",
-  "tools": ["file_write", "shell_exec", "db_query"],
-  "validation": "Endpoint returns 201 on valid input, 400 on invalid"
-}
-```
-
-#### 2.3 DevOps Agent
-
-**Specialty:** Docker, CI/CD, infrastructure.
-
-**Tools:**
-- `file_*`: Write Dockerfiles, configs
-- `shell_*`: Build images, deploy
-- `github_*`: Create workflows
-
-**Subtask Example:**
-```json
-{
-  "id": "DO-001",
-  "description": "Set up GitHub Actions CI for automated testing",
-  "tools": ["file_write", "github_create_workflow"],
-  "validation": "Workflow runs on push and reports status"
+  subtaskId: string;
+  status: 'success' | 'failed';
+  output: string;            // Final summary or error message
+  toolCallsExecuted: string[];
+  filesModified: string[];
+  selfCorrectionAttempts?: number; // Number of auto-corrections tried
 }
 ```
 
@@ -119,205 +84,91 @@ Each subtask should be:
 
 ### 3. REVIEWER Agent
 
-**Responsibility:** Quality assurance and validation.
+**Responsibility:** Quality assurance, validation, and automated testing.
 
-**Input:**
+**New Feature: Unit Test Generation**
+
+- Upon approving the Executor's work (`reviewStatus: 'approved'`), the Reviewer identifies all new or modified code files (`.ts`, `.tsx`, `.py`).
+- It then invokes a specialized prompt to generate unit tests for these files using `vitest`.
+- The tests are written to `<filename>.test.ts` and executed via `shell_exec`.
+- The test run results are appended to the final review notes, providing an automated quality gate.
+
+**Input (State):**
 ```typescript
 {
-  subtaskResults: {
-    id: string;
-    output: any;
-    logs: string[];
-  }[];
-  originalTask: string;
+  task: string;
+  subtasks: Subtask[];
+  results: Record<string, SubtaskResult>; // All executor results
+  shortTermMemory: string[];               // Full context from Planner and all Executors
 }
 ```
 
-**Checks:**
-1. **Functional:** Does output meet task requirements?
-2. **Technical:** Code quality (lint, type-check)
-3. **Security:** No hardcoded secrets, safe dependencies
-4. **Performance:** No obvious bottlenecks
-
-**Output:**
+**Output (State Update):**
 ```typescript
 {
-  status: 'approved' | 'rejected';
-  issues: [
-    {
-      severity: 'critical' | 'major' | 'minor';
-      description: string;
-      suggestedFix: string;
-    }
-  ];
-  nextAction: 'complete' | 'iterate' | 'escalate';
+  reviewStatus: 'approved' | 'rejected' | 'needs_revision';
+  revisionNotes?: string; // Feedback for the next iteration
+  iterationCount: number;  // Incremented on each review
 }
-```
-
-**Prompt Template:**
-```
-You are a code reviewer. Evaluate this work:
-
-<original_task>
-{task}
-</original_task>
-
-<executor_output>
-{results}
-</executor_output>
-
-<validation_criteria>
-- Meets all requirements
-- No security vulnerabilities
-- Follows project conventions (see /docs/standards.md)
-- Has tests (if applicable)
-</validation_criteria>
-
-Provide a JSON review with status and detailed issues.
 ```
 
 ---
 
 ## 🔀 Agent Coordination (LangGraph)
 
+### State Graph (`OracleState`)
+
+The graph operates on a shared state object. Key fields include:
+
+- `task: string`
+- `subtasks: Subtask[]`
+- `currentSubtask: number`
+- `results: Record<string, SubtaskResult>`
+- `reviewStatus: 'pending' | 'approved' | ...`
+- `iterationCount: number`
+- **`shortTermMemory: string[]`**: A log of high-level actions taken by each agent in the current loop. It's passed to subsequent agents to provide contextual awareness.
+
 ### State Transitions
 
 ```typescript
-const oracleGraph = new StateGraph({
-  nodes: {
-    planner: plannerAgent,
-    executor: executorAgent,
-    reviewer: reviewerAgent,
-  },
-  edges: [
-    { from: 'planner', to: 'executor', condition: (state) => state.subtasks.length > 0 },
-    { from: 'executor', to: 'reviewer', condition: (state) => state.currentSubtask === state.subtasks.length },
-    { from: 'reviewer', to: 'executor', condition: (state) => state.reviewStatus === 'rejected' && state.iterationCount < 3 },
-    { from: 'reviewer', to: END, condition: (state) => state.reviewStatus === 'approved' },
-  ],
-});
-```
-
-### Parallel Execution
-
-When subtasks have no dependencies, execute in parallel:
-
-```typescript
-const parallelExecutor = async (subtasks: Subtask[]) => {
-  const independentSubtasks = subtasks.filter(s => s.dependencies.length === 0);
-  
-  const results = await Promise.all(
-    independentSubtasks.map(subtask => 
-      executorAgent.run({ subtask, tools: getToolsForAgent(subtask.assignedAgent) })
-    )
-  );
-  
-  return results;
-};
-```
-
----
-
-## 🧪 Testing Strategy
-
-### Agent Unit Tests
-
-**Test Planner:**
-```typescript
-test('planner decomposes complex task into subtasks', async () => {
-  const input = { task: 'Build a todo app with auth', context: [] };
-  const output = await plannerAgent.run(input);
-  
-  expect(output.subtasks.length).toBeGreaterThan(3);
-  expect(output.subtasks.some(s => s.assignedAgent === 'frontend')).toBe(true);
-  expect(output.subtasks.some(s => s.assignedAgent === 'backend')).toBe(true);
-});
-```
-
-**Test Executor:**
-```typescript
-test('frontend agent creates React component', async () => {
-  const subtask = { description: 'Create Button component', tools: ['file_write'] };
-  const output = await frontendAgent.run({ subtask });
-  
-  expect(output.files).toContain('src/components/Button.tsx');
-  expect(output.logs).toContain('Component created successfully');
-});
-```
-
-### Integration Tests
-
-**End-to-End Task:**
-```typescript
-test('complete task: create landing page', async () => {
-  const task = 'Create a landing page with hero section and CTA button';
-  const finalState = await oracleGraph.run({ task });
-  
-  expect(finalState.reviewStatus).toBe('approved');
-  expect(finalState.errors).toHaveLength(0);
-  expect(fs.existsSync('src/pages/index.tsx')).toBe(true);
-}, 300000); // 5 min timeout
-```
-
----
-
-## 📈 Performance Optimization
-
-### Agent Response Caching
-
-Cache LLM responses for identical subtasks:
-
-```typescript
-const cache = new Map<string, any>();
-
-const cachedExecutorAgent = async (input: any) => {
-  const cacheKey = hash(input.subtask.description);
-  
-  if (cache.has(cacheKey)) {
-    return cache.get(cacheKey);
+const oracleGraph = new StateGraph<OracleState>({
+  channels: {
+    // ... other channels
+    shortTermMemory: { value: (x, y) => x.concat(y), default: () => [] },
   }
-  
-  const result = await executorAgent.run(input);
-  cache.set(cacheKey, result);
-  
-  return result;
-};
+});
+
+// 1. START -> planner
+// 2. planner -> executor_router (routes to frontend/backend/generic executor)
+// 3. executor -> executor_router (loops until all subtasks are done)
+// 4. executor_router -> reviewer (when all subtasks are done)
+// 5. reviewer -> executor_router (if needs_revision and iterations < 3)
+// 6. reviewer -> save_skill (if approved)
+// 7. save_skill -> END
 ```
 
-### Streaming Responses
+Each node (Planner, Executor, Reviewer) now appends a summary of its actions to `shortTermMemory`, for example:
 
-Stream agent progress to Antigravity UI:
-
-```typescript
-const streamingExecutor = async (subtask: Subtask, onProgress: (msg: string) => void) => {
-  onProgress(`Starting: ${subtask.description}`);
-  
-  const result = await executorAgent.run({ subtask });
-  
-  onProgress(`Completed: ${subtask.id}`);
-  
-  return result;
-};
-```
+- `[Planner] Decomposed task into 5 subtasks: Create UI, Build API...`
+- `[Executor/frontend] Subtask "Create UI" → success. Files: Button.tsx, Input.tsx.`
+- `[Reviewer] Attempt 1/3 → approved. Generated 2 unit tests.`
 
 ---
 
 ## 🔮 Future Enhancements
 
-### Self-Improving Agents
+### Human-in-the-Loop
 
-- **Feedback Loop:** Capture manual corrections from user → Store as negative examples in RAG
-- **A/B Testing:** Run two strategies (conservative vs. aggressive) → Measure which completes faster
-- **Skill Evolution:** Automatically promote successful subtask executions to reusable skills
+- **Live Intervention:** Allow the user to send messages via the `ChatInput` *during* execution. The active agent can pause and incorporate this feedback in real-time.
 
 ### Specialized Agents
 
-- **Data Agent:** Analytics, ETL, data validation
-- **Design Agent:** Figma integration, design system adherence
-- **Security Agent:** OWASP checks, dependency audits
-- **Documentation Agent:** Auto-generate API docs, READMEs
+- **Data Agent:** Analytics, ETL, data validation.
+- **Design Agent:** Figma integration, design system adherence.
+- **Security Agent:** OWASP checks, dependency audits.
+- **Documentation Agent:** Auto-generate API docs, READMEs from code and execution history.
 
 ---
 
-**Last Updated:** 2026-03-05  
-**Maintained By:** Matheus Petry
+**Last Updated:** 2026-03-06
+**Maintained By:** Manus AI

@@ -1,3 +1,4 @@
+'''
 # Prompt Otimizado para Evolução do ORACLE-OS por Manus
 
 **Contexto:** O projeto ORACLE-OS é um sistema de agentes de IA autônomos, com backend em Node.js/TypeScript + LangGraph e frontend em Next.js 14. Ele visa automatizar o ciclo de desenvolvimento de software, orquestrando agentes (Planner, Executor, Reviewer) que utilizam RAG para compreensão da base de código e um conjunto de ferramentas para interagir com o ambiente.
@@ -88,3 +89,4 @@
 2.  Arquivo `docs/manus-prompt.md` atualizado com este novo conteúdo.
 3.  Arquivos `AGENTS.md` e `RUNBOOK.md` atualizados.
 4.  Um commit final com a mensagem `feat: evolve oracle-os with enhanced agent intelligence and UX` `interactive UI` `UX` `UI`.
+'''

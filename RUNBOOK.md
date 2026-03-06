@@ -1,6 +1,6 @@
 # ORACLE-OS Runbook
 
-> **Operational procedures and troubleshooting guide**
+> **Operational procedures and troubleshooting guide (Sprint 10)**
 
 ---
 
@@ -10,12 +10,12 @@
 
 - **Node.js:** 20.x or higher
 - **npm/pnpm:** Latest version
-- **Antigravity IDE:** Latest version with MCP support
 - **Environment Variables:**
   ```bash
   ANTHROPIC_API_KEY=sk-ant-...
-  E2B_API_KEY=e2b_...
-  GITHUB_TOKEN=ghp_...
+  GROQ_API_KEY=gsk_...
+  GEMINI_API_KEY=...
+  # etc.
   ```
 
 ### Initial Setup
@@ -25,74 +25,53 @@
 git clone https://github.com/matheusoption-bit/ORACLE-OS.git
 cd ORACLE-OS
 
-# 2. Run bootstrap script
-node bootstrap/oracle-os-bootstrap.js
-
-# 3. Install dependencies
+# 2. Install dependencies (backend & frontend)
 npm install
+cd web && npm install && cd ..
 
-# 4. Configure environment
+# 3. Configure environment
 cp .env.example .env
 # Edit .env with your API keys
 
-# 5. Start development server
+# 4. Start backend API and frontend UI
 npm run dev
 ```
+
+The backend server will run on `http://localhost:3001` and the frontend will be accessible at `http://localhost:3000`.
 
 ---
 
 ## 🔧 Configuration
 
-### Antigravity MCP Setup
+### Agent Model Configuration
 
-**Location:** `~/.antigravity/mcp-config.json`
+**File:** `src/config.ts`
 
-```json
-{
-  "mcpServers": {
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_TOKEN": "ghp_your_token_here"
-      }
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
-    },
-    "e2b": {
-      "command": "npx",
-      "args": ["-y", "@e2b/mcp-server"],
-      "env": {
-        "E2B_API_KEY": "e2b_your_key_here"
-      }
-    }
-  }
-}
+Model selection for each agent is now centralized and supports multiple providers.
+
+```typescript
+export const config: OracleConfig = {
+  agents: {
+    // Hybrid strategy: use the best model for each role
+    planner: { modelId: DEFAULT_MODELS.planner, temperature: 0.7 },   // Claude Sonnet for complex reasoning
+    executor: { modelId: DEFAULT_MODELS.executor, temperature: 0.2 },  // Groq Llama for speed
+    reviewer: { modelId: DEFAULT_MODELS.reviewer, temperature: 0.3 },  // Gemini Flash for validation
+  },
+  // ...
+};
 ```
 
-### Agent Configuration
+### UI Configuration
 
 **File:** `src/config.ts`
 
 ```typescript
 export const config: OracleConfig = {
-  agents: {
-    planner: { 
-      model: 'anthropic/claude-3-7-sonnet',
-      temperature: 0.7,  // Higher for creative planning
-    },
-    executor: { 
-      model: 'anthropic/claude-3-7-sonnet',
-      temperature: 0.2,  // Lower for deterministic execution
-    },
-    reviewer: { 
-      model: 'anthropic/claude-3-7-sonnet',
-      temperature: 0.3,  // Balanced for evaluation
-    },
-  },
   // ...
+  ui: {
+    allowModelSwitching: true,      // Enable model selector in the UI
+    defaultUserModel: 'llama-3.3-70b', // Free model as default
+  },
 };
 ```
 
@@ -100,81 +79,42 @@ export const config: OracleConfig = {
 
 ## 📝 Usage Patterns
 
-### Running a Task
+### Running a Task via UI
 
-**In Antigravity IDE:**
+1.  Navigate to `http://localhost:3000`.
+2.  Enter your task prompt in the main input field.
+3.  (Optional) Select a specific task mode (e.g., Website, App, Fix).
+4.  (Optional) Select a different primary model if `allowModelSwitching` is enabled.
+5.  Click "Start Task".
 
-```typescript
-import { createOracleGraph } from './src/graphs/oracle-graph';
-import { createInitialState } from './src/state/oracle-state';
-import { config } from './src/config';
+### Intervening During Execution
 
-const graph = createOracleGraph(config);
-const initialState = createInitialState(
-  'Create a Next.js dashboard with user authentication'
-);
-
-const result = await graph.invoke(initialState);
-console.log('Final state:', result);
-```
-
-### Task Examples
-
-**Frontend Task:**
-```
-Create a responsive pricing page with 3 tiers (Basic, Pro, Enterprise) using Tailwind CSS
-```
-
-**Backend Task:**
-```
-Implement a REST API for user management with CRUD operations and JWT authentication
-```
-
-**Full-Stack Task:**
-```
-Build a todo app with Next.js frontend, Supabase backend, and real-time updates
-```
-
-**DevOps Task:**
-```
-Set up Docker containerization and GitHub Actions CI/CD pipeline
-```
+- While a task is in `planning`, `running`, or `reviewing` state, the chat input enters **Intervention Mode**.
+- Type a message and press `Enter` to send instructions to the active agent.
+- The agent will receive the message and can adjust its course of action.
+- **Example:** If the agent is creating a blue button, you can intervene with "Change the button color to red."
 
 ---
 
-## 🔍 Monitoring
+## 🔍 Monitoring (Real-Time UI)
 
-### Logs
+All key monitoring is now available directly in the web interface, replacing most CLI-based monitoring.
 
-**Agent Decisions:**
-```bash
-tail -f monitoring/logs/agents.jsonl
-```
+### 1. Chat Panel
 
-**Tool Calls:**
-```bash
-tail -f monitoring/logs/tools.jsonl
-```
+- **Agent Messages:** See decisions and outputs from the Planner, Executor, and Reviewer as they happen.
+- **Plan View:** The full task plan is displayed and updated as subtasks are completed.
+- **Subtask Progress:** A sticky progress bar shows the current subtask and overall completion.
 
-### Metrics Dashboard
+### 2. Workbench Tabs
 
-```bash
-# View metrics (requires pandas)
-python scripts/view-metrics.py
-```
-
-**Sample Output:**
-```
-╭─────────────────────────────────────╮
-│       ORACLE-OS Metrics             │
-├─────────────────────────────────────┤
-│ Task Completion Rate:    87.5%      │
-│ Avg Iterations:          1.3        │
-│ Error Rate:              5.2%       │
-│ Most Used Tool:          file_write │
-│ RAG Accuracy:            92.1%      │
-╰─────────────────────────────────────╯
-```
+- **Files Tab:** A hierarchical file tree shows all created/modified files. Click a file to open it in the Code tab.
+- **Code Tab:** A full-featured code editor (Monaco) to view and edit files generated by the agent.
+- **Terminal Tab:** A live stream of agent logs, including tool calls and internal status messages.
+- **Metrics Tab:** Real-time dashboard with:
+    - **Total Cost (USD):** Updates every 2 seconds.
+    - **Tokens per Agent:** Animated bars showing token usage for Planner, Executor, and Reviewer.
+    - **Duration & Progress:** Live timer and subtask completion percentage.
 
 ---
 
@@ -182,235 +122,40 @@ python scripts/view-metrics.py
 
 ### Common Issues
 
-#### 1. "MCP Server Not Found"
+#### 1. "Connection Failed" on Workspace Screen
 
-**Symptom:** Agents fail with tool call errors.
-
-**Solution:**
-```bash
-# Check MCP server status in Antigravity
-cat ~/.antigravity/mcp-config.json
-
-# Verify server is installed
-npx -y @modelcontextprotocol/server-github --version
-
-# Restart Antigravity IDE
-```
-
-#### 2. "E2B Sandbox Timeout"
-
-**Symptom:** Code execution hangs or times out.
+**Symptom:** The UI shows a "Sem conexão com o servidor" error.
 
 **Solution:**
-```typescript
-// Increase timeout in config.ts
-export const config = {
-  // ...
-  e2b: {
-    timeout: 600000, // 10 minutes
-  },
-};
-```
+- Ensure the backend server is running on port 3001 (`npm run dev` in the root directory).
+- Check for firewall rules blocking the connection.
+- Look for errors in the backend server console.
 
-#### 3. "Reviewer Rejects All Outputs"
+#### 2. Executor Auto-Correction Fails Repeatedly
 
-**Symptom:** Infinite iteration loop, never approves.
+**Symptom:** The Executor log shows multiple `Auto-correction` attempts for the same error, eventually failing the subtask.
 
 **Solution:**
-```typescript
-// Lower reviewer temperature (more lenient)
-export const config = {
-  agents: {
-    reviewer: { 
-      model: 'anthropic/claude-3-7-sonnet',
-      temperature: 0.1,  // More deterministic, less strict
-    },
-  },
-};
-```
+- **Check `KNOWN_ERROR_PATTERNS`:** The error might not be recognized. Add a new pattern to `src/agents/executor.ts`.
+- **Manual Intervention:** Use the **ChatInput** to provide the correct command or fix to the agent.
+- **Environment Issue:** The underlying sandbox environment might be missing a fundamental dependency that `npm` or `pip` cannot fix. Connect to the sandbox and install it manually.
 
-#### 4. "RAG Returns Irrelevant Results"
+#### 3. Metrics Not Updating
 
-**Symptom:** Planner uses wrong skills/examples.
+**Symptom:** The Metrics Panel shows 0 for all values even while the task is running.
 
 **Solution:**
-```bash
-# Re-index codebase
-npm run rag:reindex
-
-# Check embedding model
-cat src/config.ts | grep embeddingModel
-
-# Use better embeddings (if cost allows)
-# text-embedding-3-small → text-embedding-3-large
-```
-
----
-
-## 🐞 Debugging
-
-### Enable Verbose Logging
-
-```typescript
-// In src/config.ts
-export const config = {
-  monitoring: {
-    enabled: true,
-    logLevel: 'debug',  // Change from 'info' to 'debug'
-  },
-};
-```
-
-### Inspect Agent State
-
-```typescript
-import { createOracleGraph } from './src/graphs/oracle-graph';
-
-const graph = createOracleGraph(config);
-
-// Add breakpoint/logging
-graph.addNode('debug', (state) => {
-  console.log('Current state:', JSON.stringify(state, null, 2));
-  return state;
-});
-```
-
-### Test Individual Agents
-
-```typescript
-import { plannerAgent } from './src/agents/planner';
-import { createInitialState } from './src/state/oracle-state';
-
-const state = createInitialState('Test task');
-const plan = await plannerAgent.run(state, config);
-console.log('Planner output:', plan);
-```
-
----
-
-## 💾 Backup & Recovery
-
-### Backup Workspace
-
-```bash
-# Create timestamped backup
-tar -czf backup-$(date +%Y%m%d-%H%M%S).tar.gz workspace/
-```
-
-### Restore from Backup
-
-```bash
-# Extract backup
-tar -xzf backup-20260305-143000.tar.gz
-
-# Verify integrity
-ls -lah workspace/
-```
-
-### Export Agent Logs
-
-```bash
-# Export last 24 hours
-cat monitoring/logs/agents.jsonl | \
-  jq 'select(.timestamp > "2026-03-04")' > logs-export.jsonl
-```
-
----
-
-## 🚑 Emergency Procedures
-
-### Kill Runaway Agent
-
-```bash
-# Find process
-ps aux | grep oracle-os
-
-# Kill gracefully
-kill -SIGTERM <PID>
-
-# Force kill if needed
-kill -SIGKILL <PID>
-```
-
-### Rollback Bad Changes
-
-```bash
-# View recent commits
-git log --oneline -10
-
-# Rollback to safe state
-git reset --hard <commit-sha>
-
-# Or revert specific commit
-git revert <commit-sha>
-```
-
-### Clear Corrupted State
-
-```bash
-# Remove cached state
-rm -rf .langgraph/
-
-# Clear node_modules and reinstall
-rm -rf node_modules package-lock.json
-npm install
-```
-
----
-
-## 📊 Performance Tuning
-
-### Optimize for Speed
-
-```typescript
-// Use faster models for executor
-export const config = {
-  agents: {
-    executor: { 
-      model: 'anthropic/claude-3-haiku',  // Faster, cheaper
-      temperature: 0.1,
-    },
-  },
-};
-```
-
-### Optimize for Quality
-
-```typescript
-// Use best models, increase iterations
-export const config = {
-  agents: {
-    planner: { model: 'anthropic/claude-3-opus', temperature: 0.8 },
-    executor: { model: 'anthropic/claude-3-7-sonnet', temperature: 0.2 },
-    reviewer: { model: 'anthropic/claude-3-opus', temperature: 0.4 },
-  },
-  maxIterations: 5,  // Allow more retry attempts
-};
-```
-
-### Enable Caching
-
-```typescript
-import { InMemoryCache } from '@langchain/core/caches';
-
-const cache = new InMemoryCache();
-
-const model = new ChatAnthropic({
-  cache,  // Enable response caching
-});
-```
+- Check the WebSocket connection status. A disconnected state will prevent `agent:cost` events from being received.
+- Verify that `costTracker.track()` is being called correctly within the agent nodes in `src/graphs/oracle-graph.ts`.
 
 ---
 
 ## 📚 Resources
 
 - **LangGraph Docs:** https://langchain-ai.github.io/langgraph/
-- **Anthropic API:** https://docs.anthropic.com/
-- **MCP Specification:** https://modelcontextprotocol.io/
-- **E2B Sandboxes:** https://e2b.dev/docs
 - **Project Issues:** https://github.com/matheusoption-bit/ORACLE-OS/issues
 
 ---
 
-**Last Updated:** 2026-03-05  
-**Maintained By:** Matheus Petry
+**Last Updated:** 2026-03-06
+**Maintained By:** Manus AI
