@@ -1,17 +1,39 @@
 /**
- * ORACLE-OS · Testes de integração — Oracle Graph (Sprint 9)
- * Cobre: fluxo completo do grafo, integração com skill-generator,
- * roteamento de executores e tratamento de erros.
+ * ORACLE-OS · Testes de integração — Oracle Graph (Quadripartite Architecture)
+ * Cobre: fluxo completo do grafo Analyst → Reviewer → Executor → Synthesis,
+ * roteamento condicional, iteration guards, e tratamento de erros.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ─── Mocks de dependências externas ──────────────────────────────────────────
-vi.mock('../agents/planner.js', () => ({
-  plannerAgent: vi.fn(),
+vi.mock('../agents/analyst.js', () => ({
+  analystNode: vi.fn(),
+}));
+
+vi.mock('../agents/reviewer.js', () => ({
+  reviewerNode: vi.fn(),
 }));
 
 vi.mock('../agents/executor.js', () => ({
+  executorNode: vi.fn(),
   executorAgent: vi.fn(),
+  executorRouter: vi.fn().mockReturnValue('executor'),
+}));
+
+vi.mock('../agents/synthesis.js', () => ({
+  synthesisNode: vi.fn(),
+  costTracker: {
+    startTask: vi.fn(),
+    track: vi.fn(),
+    getTaskReport: vi.fn().mockReturnValue({
+      totalCostUSD: 0.001,
+      analyst:   { tokens: 100 },
+      reviewer:  { tokens: 50 },
+      executor:  { tokens: 200 },
+      synthesis: { tokens: 75 },
+    }),
+    compareWithEstimate: vi.fn().mockReturnValue({ efficiency: 95 }),
+  },
 }));
 
 vi.mock('../agents/frontend-executor.js', () => ({
@@ -20,10 +42,6 @@ vi.mock('../agents/frontend-executor.js', () => ({
 
 vi.mock('../agents/backend-executor.js', () => ({
   backendExecutorAgent: vi.fn(),
-}));
-
-vi.mock('../agents/reviewer.js', () => ({
-  reviewerAgent: vi.fn(),
 }));
 
 vi.mock('../rag/rag-pipeline.js', () => ({
@@ -45,62 +63,62 @@ vi.mock('../monitoring/metrics.js', () => ({
 }));
 
 vi.mock('../monitoring/logger.js', () => ({
-  plannerLogger:  { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  executorLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  reviewerLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  systemLogger:   { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
-
-vi.mock('../monitoring/cost-tracker.js', () => ({
-  CostTracker: vi.fn().mockImplementation(() => ({
-    startTask:           vi.fn(),
-    track:               vi.fn(),
-    getTaskReport:       vi.fn().mockReturnValue({
-      totalCostUSD: 0.001,
-      planner:  { tokens: 100 },
-      executor: { tokens: 200 },
-      reviewer: { tokens: 50 },
-    }),
-    compareWithEstimate: vi.fn().mockReturnValue({ efficiency: 95 }),
-  })),
+  analystLogger:   { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  reviewerLogger:  { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  executorLogger:  { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  synthesisLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  systemLogger:    { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  plannerLogger:   { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock('../config.js', () => ({
   config: {
     agents: {
-      planner:  { modelId: 'claude-3-5-sonnet' },
-      executor: { modelId: 'claude-3-haiku' },
-      reviewer: { modelId: 'claude-3-5-sonnet' },
+      analyst:   { modelId: 'claude-3-5-sonnet', temperature: 0.5 },
+      reviewer:  { modelId: 'claude-3-5-sonnet', temperature: 0.3 },
+      executor:  { modelId: 'claude-3-haiku', temperature: 0.2 },
+      synthesis: { modelId: 'claude-3-5-sonnet', temperature: 0.4 },
+      planner:   { modelId: 'claude-3-5-sonnet', temperature: 0.7 },
+    },
+    pipeline: {
+      maxReviewerAnalystIterations: 3,
+      maxExecutorRetries: 3,
+      maxSubtasksPerBlueprint: 8,
     },
   },
 }));
 
 // ─── Imports após mocks ───────────────────────────────────────────────────────
 import { createOracleGraph } from './oracle-graph.js';
-import { plannerAgent } from '../agents/planner.js';
-import { executorAgent } from '../agents/executor.js';
-import { reviewerAgent } from '../agents/reviewer.js';
-import { generateSkillFromTask } from '../rag/skill-generator.js';
-import { saveTaskAsSkill } from '../rag/rag-pipeline.js';
+import { analystNode } from '../agents/analyst.js';
+import { reviewerNode } from '../agents/reviewer.js';
+import { executorNode } from '../agents/executor.js';
+import { synthesisNode } from '../agents/synthesis.js';
 
-const mockPlannerAgent  = vi.mocked(plannerAgent);
-const mockExecutorAgent = vi.mocked(executorAgent);
-const mockReviewerAgent = vi.mocked(reviewerAgent);
+const mockAnalystNode   = vi.mocked(analystNode);
+const mockReviewerNode  = vi.mocked(reviewerNode);
+const mockExecutorNode  = vi.mocked(executorNode);
+const mockSynthesisNode = vi.mocked(synthesisNode);
 
-// ─── Estado inicial base ──────────────────────────────────────────────────────
+// ─── Estado inicial base (Quadripartite) ─────────────────────────────────────
 const baseState = {
   task: 'Criar uma API REST com autenticação JWT',
+  currentStage: 'analyst' as const,
+  contextDocument: null,
+  executionBlueprint: null,
+  executedCode: null,
+  synthesisOutput: null,
   subtasks: [],
   currentSubtask: 0,
   results: {},
   errors: [],
   reviewStatus: 'pending' as const,
-  revisionNotes: '',
   iterationCount: 0,
+  shortTermMemory: [],
 };
 
 // ─── Testes ───────────────────────────────────────────────────────────────────
-describe('Oracle Graph — Fluxo completo', () => {
+describe('Oracle Graph — Quadripartite Pipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -109,188 +127,177 @@ describe('Oracle Graph — Fluxo completo', () => {
     expect(() => createOracleGraph()).not.toThrow();
   });
 
-  it('executa fluxo aprovado: planner → executor → reviewer → save_skill', async () => {
+  it('executa fluxo completo: analyst → reviewer → executor → synthesis', async () => {
     const subtask = {
       id: 'sub-001',
       title: 'Criar endpoint /auth/login',
-      type: 'api',
+      type: 'code',
       assignedAgent: 'backend',
-      expectedOutput: 'Endpoint funcional',
+      description: 'Implementar endpoint de login',
+      priority: 1,
+      dependsOn: [],
       dependencies: [],
+      estimatedDuration: 15,
+      tools: ['file_write', 'shell_exec'],
+      validationCriteria: 'Endpoint funcional',
     };
 
-    // Planner retorna 1 subtask
-    mockPlannerAgent.mockResolvedValue({
+    // Analyst retorna Context Document
+    mockAnalystNode.mockResolvedValue({
+      contextDocument: {
+        taskSummary: 'Criar API REST com JWT',
+        ragContext: '',
+        requirements: ['Endpoint de login'],
+        relevantFiles: ['src/routes/auth.ts'],
+        complexityLevel: 'medium',
+        externalDependencies: ['jsonwebtoken'],
+        initialRisks: [],
+        timestamp: new Date().toISOString(),
+      },
+      currentStage: 'reviewer',
+      shortTermMemory: ['[Analyst] Analisou tarefa'],
+    } as any);
+
+    // Reviewer aprova e retorna Blueprint
+    mockReviewerNode.mockResolvedValue({
+      executionBlueprint: {
+        status: 'approved',
+        subtasks: [subtask],
+        executionPlan: 'sequential',
+        architecturalNotes: 'Plano sólido',
+        securityRisks: [],
+        redundanciesFound: [],
+        timestamp: new Date().toISOString(),
+      },
       subtasks: [subtask],
       currentSubtask: 0,
-      iterationCount: 0,
-    } as any);
-
-    // Executor genérico retorna sucesso
-    mockExecutorAgent.mockResolvedValue({
-      results: {
-        'sub-001': {
-          subtaskId: 'sub-001',
-          status: 'completed',
-          output: 'Endpoint criado com sucesso',
-          toolCallsExecuted: [],
-          filesModified: [],
-          timestamp: new Date().toISOString(),
-        },
-      },
-      currentSubtask: 1,
-    } as any);
-
-    // Reviewer aprova
-    mockReviewerAgent.mockResolvedValue({
+      currentStage: 'executor',
       reviewStatus: 'approved',
-      revisionNotes: '',
       iterationCount: 1,
+      shortTermMemory: ['[Analyst] Analisou tarefa', '[Reviewer] Aprovado'],
+    } as any);
+
+    // Executor executa subtasks
+    mockExecutorNode.mockResolvedValue({
+      executedCode: {
+        results: { 'sub-001': { subtaskId: 'sub-001', status: 'success', output: 'OK' } },
+        allFilesModified: ['src/routes/auth.ts'],
+        testResults: [],
+        packagesInstalled: ['jsonwebtoken'],
+        executionErrors: [],
+        timestamp: new Date().toISOString(),
+      },
+      results: { 'sub-001': { subtaskId: 'sub-001', status: 'success', output: 'OK' } },
+      currentSubtask: 1,
+      currentStage: 'synthesis',
+      shortTermMemory: ['[Analyst]', '[Reviewer]', '[Executor] sub-001 OK'],
+    } as any);
+
+    // Synthesis gera documentação
+    mockSynthesisNode.mockResolvedValue({
+      synthesisOutput: {
+        executiveSummary: 'API REST com JWT implementada com sucesso.',
+        commitMessages: ['feat(auth): add JWT login endpoint'],
+        changelogEntries: ['### Added\n- JWT login endpoint'],
+        readmeUpdates: '',
+        finalFiles: [{ path: 'src/routes/auth.ts', description: 'Login endpoint' }],
+        qualityMetrics: { subtasksCompleted: 1, subtasksTotal: 1, testsPassRate: 100, selfCorrections: 0 },
+        timestamp: new Date().toISOString(),
+      },
+      currentStage: 'completed',
     } as any);
 
     const graph = createOracleGraph();
     const finalState = await graph.invoke(baseState);
 
-    expect(finalState.reviewStatus).toBe('approved');
-    expect(saveTaskAsSkill).toHaveBeenCalledOnce();
-    expect(generateSkillFromTask).toHaveBeenCalledOnce();
+    expect(mockAnalystNode).toHaveBeenCalledOnce();
+    expect(mockReviewerNode).toHaveBeenCalledOnce();
+    expect(mockExecutorNode).toHaveBeenCalledOnce();
+    expect(mockSynthesisNode).toHaveBeenCalledOnce();
   });
 
   it('executa re-iteração quando reviewer solicita revisão', async () => {
-    const subtask = {
-      id: 'sub-002',
-      title: 'Adicionar validação de input',
-      type: 'api',
-      assignedAgent: 'backend',
-      expectedOutput: 'Validação implementada',
-      dependencies: [],
-    };
-
-    mockPlannerAgent.mockResolvedValue({
-      subtasks: [subtask],
-      currentSubtask: 0,
-      iterationCount: 0,
+    // First analyst call
+    mockAnalystNode.mockResolvedValue({
+      contextDocument: {
+        taskSummary: 'Tarefa incompleta',
+        ragContext: '',
+        requirements: ['Req 1'],
+        relevantFiles: [],
+        complexityLevel: 'medium',
+        externalDependencies: [],
+        initialRisks: [],
+        timestamp: new Date().toISOString(),
+      },
+      currentStage: 'reviewer',
+      shortTermMemory: ['[Analyst] Primeira análise'],
     } as any);
 
-    mockExecutorAgent.mockResolvedValue({
-      results: {
-        'sub-002': {
-          subtaskId: 'sub-002',
-          status: 'completed',
-          output: 'Implementado',
-          toolCallsExecuted: [],
-          filesModified: [],
+    // First reviewer: needs_revision
+    mockReviewerNode
+      .mockResolvedValueOnce({
+        executionBlueprint: {
+          status: 'needs_revision',
+          subtasks: [],
+          feedbackToAnalyst: 'Falta análise de segurança',
           timestamp: new Date().toISOString(),
         },
-      },
-      currentSubtask: 1,
-    } as any);
-
-    // Primeiro reviewer solicita revisão, segundo aprova
-    mockReviewerAgent
-      .mockResolvedValueOnce({
+        currentStage: 'analyst',
         reviewStatus: 'needs_revision',
-        revisionNotes: 'Adicionar tratamento de erro',
         iterationCount: 1,
+        shortTermMemory: ['[Analyst]', '[Reviewer] needs_revision'],
       } as any)
+      // Second reviewer: approved
       .mockResolvedValueOnce({
+        executionBlueprint: {
+          status: 'approved',
+          subtasks: [{ id: 'sub-1', title: 'Task', type: 'code', assignedAgent: 'geral', dependencies: [], dependsOn: [], priority: 1, estimatedDuration: 15, tools: [], validationCriteria: '', description: '' }],
+          timestamp: new Date().toISOString(),
+        },
+        subtasks: [{ id: 'sub-1', title: 'Task', type: 'code', assignedAgent: 'geral', dependencies: [], dependsOn: [], priority: 1, estimatedDuration: 15, tools: [], validationCriteria: '', description: '' }],
+        currentStage: 'executor',
         reviewStatus: 'approved',
-        revisionNotes: '',
         iterationCount: 2,
       } as any);
 
-    const graph = createOracleGraph();
-    const finalState = await graph.invoke(baseState);
+    mockExecutorNode.mockResolvedValue({
+      executedCode: { results: {}, allFilesModified: [], testResults: [], packagesInstalled: [], executionErrors: [], timestamp: new Date().toISOString() },
+      currentStage: 'synthesis',
+    } as any);
 
-    expect(finalState.reviewStatus).toBe('approved');
-    // Reviewer foi chamado 2 vezes
-    expect(mockReviewerAgent).toHaveBeenCalledTimes(2);
-  });
-
-  it('encerra com END quando planner retorna sem subtasks', async () => {
-    mockPlannerAgent.mockResolvedValue({
-      subtasks: [],
-      currentSubtask: 0,
-      iterationCount: 0,
+    mockSynthesisNode.mockResolvedValue({
+      synthesisOutput: { executiveSummary: 'Done', commitMessages: [], changelogEntries: [], readmeUpdates: '', finalFiles: [], qualityMetrics: { subtasksCompleted: 0, subtasksTotal: 0, testsPassRate: 0, selfCorrections: 0 }, timestamp: new Date().toISOString() },
+      currentStage: 'completed',
     } as any);
 
     const graph = createOracleGraph();
     const finalState = await graph.invoke(baseState);
 
-    // Sem subtasks, o grafo deve encerrar sem chamar executor
-    expect(mockExecutorAgent).not.toHaveBeenCalled();
-    expect(mockReviewerAgent).not.toHaveBeenCalled();
+    // Analyst called twice (initial + re-analysis)
+    expect(mockAnalystNode).toHaveBeenCalledTimes(2);
+    // Reviewer called twice
+    expect(mockReviewerNode).toHaveBeenCalledTimes(2);
   });
 
-  it('skill-generator é chamado após aprovação', async () => {
-    const subtask = {
-      id: 'sub-003',
-      title: 'Criar middleware de autenticação',
-      type: 'api',
-      assignedAgent: 'backend',
-      expectedOutput: 'Middleware funcional',
-      dependencies: [],
-    };
-
-    mockPlannerAgent.mockResolvedValue({
-      subtasks: [subtask],
-      currentSubtask: 0,
-      iterationCount: 0,
+  it('encerra com END quando reviewer rejeita', async () => {
+    mockAnalystNode.mockResolvedValue({
+      contextDocument: { taskSummary: 'Tarefa perigosa', ragContext: '', requirements: [], relevantFiles: [], complexityLevel: 'high', externalDependencies: [], initialRisks: ['Risco crítico'], timestamp: new Date().toISOString() },
+      currentStage: 'reviewer',
     } as any);
 
-    mockExecutorAgent.mockResolvedValue({
-      results: { 'sub-003': { subtaskId: 'sub-003', status: 'completed', output: 'ok', toolCallsExecuted: [], filesModified: [], timestamp: new Date().toISOString() } },
-      currentSubtask: 1,
-    } as any);
-
-    mockReviewerAgent.mockResolvedValue({
-      reviewStatus: 'approved',
-      revisionNotes: '',
+    mockReviewerNode.mockResolvedValue({
+      executionBlueprint: { status: 'rejected', subtasks: [], timestamp: new Date().toISOString() },
+      currentStage: 'completed',
+      reviewStatus: 'rejected',
       iterationCount: 1,
     } as any);
 
     const graph = createOracleGraph();
-    await graph.invoke(baseState);
+    const finalState = await graph.invoke(baseState);
 
-    expect(generateSkillFromTask).toHaveBeenCalledOnce();
-    // Verifica que foi chamado com o estado final
-    const [calledState] = vi.mocked(generateSkillFromTask).mock.calls[0];
-    expect(calledState.reviewStatus).toBe('approved');
-  });
-
-  it('não propaga erro do skill-generator (não crítico)', async () => {
-    const subtask = {
-      id: 'sub-004',
-      title: 'Tarefa qualquer',
-      type: 'api',
-      assignedAgent: 'backend',
-      expectedOutput: 'output',
-      dependencies: [],
-    };
-
-    mockPlannerAgent.mockResolvedValue({
-      subtasks: [subtask],
-      currentSubtask: 0,
-      iterationCount: 0,
-    } as any);
-
-    mockExecutorAgent.mockResolvedValue({
-      results: { 'sub-004': { subtaskId: 'sub-004', status: 'completed', output: 'ok', toolCallsExecuted: [], filesModified: [], timestamp: new Date().toISOString() } },
-      currentSubtask: 1,
-    } as any);
-
-    mockReviewerAgent.mockResolvedValue({
-      reviewStatus: 'approved',
-      revisionNotes: '',
-      iterationCount: 1,
-    } as any);
-
-    // Skill generator lança erro
-    vi.mocked(generateSkillFromTask).mockRejectedValue(new Error('LLM timeout'));
-
-    const graph = createOracleGraph();
-
-    // O grafo não deve lançar erro mesmo com skill-generator falhando
-    await expect(graph.invoke(baseState)).resolves.toBeDefined();
+    expect(mockAnalystNode).toHaveBeenCalledOnce();
+    expect(mockReviewerNode).toHaveBeenCalledOnce();
+    expect(mockExecutorNode).not.toHaveBeenCalled();
+    expect(mockSynthesisNode).not.toHaveBeenCalled();
   });
 });

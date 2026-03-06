@@ -1,6 +1,7 @@
 /**
- * ORACLE-OS Entry Point — Sprint 4
+ * ORACLE-OS Entry Point — Quadripartite Architecture
  * CLI interativo: aceita task via argv ou readline
+ * Pipeline: Analyst → Reviewer (Architect) → Executor → Synthesis
  */
 
 import 'dotenv/config';
@@ -12,13 +13,17 @@ import { createInitialState, OracleState } from './state/oracle-state.js';
 // ─── Banner ───────────────────────────────────────────────────────────────────
 
 function printBanner(): void {
-  console.log('\n╔══════════════════════════════════════╗');
-  console.log('║         ORACLE-OS  v0.1.0            ║');
-  console.log('║  Multi-Agent Agentic Dev Platform    ║');
-  console.log('╚══════════════════════════════════════╝\n');
-  console.log(`🧠 Planner  : ${config.agents.planner.modelId}`);
-  console.log(`⚙️  Executor : ${config.agents.executor.modelId}`);
-  console.log(`✅ Reviewer : ${config.agents.reviewer.modelId}\n`);
+  console.log('\n╔══════════════════════════════════════════════════╗');
+  console.log('║            ORACLE-OS  v0.2.0                     ║');
+  console.log('║   Quadripartite Multi-Agent Dev Platform          ║');
+  console.log('║   Analyst → Reviewer → Executor → Synthesis       ║');
+  console.log('╚══════════════════════════════════════════════════╝\n');
+  console.log(`🔬 Analyst   : ${config.agents.analyst.modelId}`);
+  console.log(`🏗️  Reviewer  : ${config.agents.reviewer.modelId}`);
+  console.log(`⚙️  Executor  : ${config.agents.executor.modelId}`);
+  console.log(`📝 Synthesis : ${config.agents.synthesis.modelId}`);
+  console.log(`\n🔄 Max Reviewer↔Analyst iterations: ${config.pipeline.maxReviewerAnalystIterations}`);
+  console.log(`📦 Max subtasks per blueprint: ${config.pipeline.maxSubtasksPerBlueprint}\n`);
 }
 
 // ─── Mostra resultado final ───────────────────────────────────────────────────
@@ -32,14 +37,38 @@ function printResult(state: OracleState): void {
   };
 
   const icon = statusIcon[state.reviewStatus] ?? '❓';
-  console.log('\n══════════════════════════════════════════');
+  console.log('\n══════════════════════════════════════════════════════');
   console.log(`${icon} STATUS FINAL: ${state.reviewStatus.toUpperCase()}`);
-  console.log('══════════════════════════════════════════');
+  console.log('══════════════════════════════════════════════════════');
 
-  if (state.revisionNotes) {
-    console.log(`\n📝 Notas: ${state.revisionNotes}`);
+  // Pipeline Stage Summary
+  console.log('\n📊 Pipeline Quadripartite:');
+  console.log(`  🔬 Analyst   : ${state.contextDocument ? '✅ Concluído' : '⬜ Não executado'}`);
+  console.log(`  🏗️  Reviewer  : ${state.executionBlueprint ? '✅ Concluído' : '⬜ Não executado'}`);
+  console.log(`  ⚙️  Executor  : ${state.executedCode ? '✅ Concluído' : '⬜ Não executado'}`);
+  console.log(`  📝 Synthesis : ${state.synthesisOutput ? '✅ Concluído' : '⬜ Não executado'}`);
+
+  // Context Document Summary
+  if (state.contextDocument) {
+    console.log(`\n🔬 Context Document:`);
+    console.log(`  Resumo: ${state.contextDocument.taskSummary}`);
+    console.log(`  Complexidade: ${state.contextDocument.complexityLevel}`);
+    console.log(`  Requisitos: ${state.contextDocument.requirements.length}`);
+    console.log(`  Arquivos relevantes: ${state.contextDocument.relevantFiles.length}`);
   }
 
+  // Execution Blueprint Summary
+  if (state.executionBlueprint) {
+    console.log(`\n🏗️  Execution Blueprint:`);
+    console.log(`  Status: ${state.executionBlueprint.status}`);
+    console.log(`  Subtasks: ${state.executionBlueprint.subtasks.length}`);
+    console.log(`  Plano: ${state.executionBlueprint.executionPlan}`);
+    if (state.executionBlueprint.securityRisks.length > 0) {
+      console.log(`  ⚠️  Riscos de segurança: ${state.executionBlueprint.securityRisks.length}`);
+    }
+  }
+
+  // Subtask Results
   if (state.subtasks.length > 0) {
     console.log(`\n📋 Subtasks executadas: ${state.subtasks.length}`);
     for (const subtask of state.subtasks) {
@@ -48,10 +77,26 @@ function printResult(state: OracleState): void {
         : result?.status === 'partial' ? '⚠️'
         : result?.status === 'failed' ? '❌'
         : '⏳';
-      console.log(`  ${resultIcon} [${subtask.id}] ${subtask.title}`);
+      console.log(`  ${resultIcon} [${subtask.id}] ${subtask.title} (${subtask.assignedAgent})`);
     }
   }
 
+  // Synthesis Output
+  if (state.synthesisOutput) {
+    console.log(`\n📝 Synthesis Output:`);
+    console.log(`  ${state.synthesisOutput.executiveSummary.substring(0, 200)}...`);
+    console.log(`\n  Commit Messages:`);
+    for (const msg of state.synthesisOutput.commitMessages) {
+      console.log(`    • ${msg}`);
+    }
+    console.log(`\n  Métricas de Qualidade:`);
+    const qm = state.synthesisOutput.qualityMetrics;
+    console.log(`    Subtasks: ${qm.subtasksCompleted}/${qm.subtasksTotal}`);
+    console.log(`    Taxa de testes: ${qm.testsPassRate.toFixed(1)}%`);
+    console.log(`    Auto-correções: ${qm.selfCorrections}`);
+  }
+
+  // Errors
   if (state.errors.length > 0) {
     console.log(`\n⚠️  Erros capturados: ${state.errors.length}`);
     for (const err of state.errors) {
@@ -59,14 +104,21 @@ function printResult(state: OracleState): void {
     }
   }
 
-  console.log(`\n🔁 Iterações: ${state.iterationCount}`);
-  console.log('══════════════════════════════════════════\n');
+  // Revision Notes
+  if (state.revisionNotes) {
+    console.log(`\n📝 Notas de revisão: ${state.revisionNotes}`);
+  }
+
+  console.log(`\n🔁 Iterações Reviewer↔Analyst: ${state.iterationCount}`);
+  console.log(`🧠 Short-term memory entries: ${state.shortTermMemory.length}`);
+  console.log('══════════════════════════════════════════════════════\n');
 }
 
 // ─── Executa uma task ─────────────────────────────────────────────────────────
 
 async function runTask(task: string): Promise<void> {
   console.log(`\n🚀 Task recebida: "${task}"\n`);
+  console.log('🔬 Iniciando pipeline Quadripartite...\n');
 
   const graph = createOracleGraph();
   const initialState = createInitialState(task);
@@ -84,6 +136,7 @@ async function runInteractive(): Promise<void> {
   });
 
   console.log('🟢 ORACLE-OS pronto! Digite sua tarefa abaixo.');
+  console.log('   Pipeline: Analyst → Reviewer → Executor → Synthesis');
   console.log('   (Ctrl+C para sair)\n');
 
   try {

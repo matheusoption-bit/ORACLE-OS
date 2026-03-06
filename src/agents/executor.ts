@@ -1,33 +1,52 @@
 /**
- * ORACLE-OS Executor Agent — Sprint 10
- * Agente LangGraph genérico que executa subtasks via tool-calling
- * Integrando sistema de Tags (Lovable), EXECUTOR_SYSTEM_PROMPT
- * e Auto-Correção inteligente no runToolLoop
+ * ORACLE-OS Executor Node — Quadripartite Architecture
+ * 
+ * Stage 3: The Sandbox Worker
+ * 
+ * The ONLY node allowed to use the E2B Sandbox and MCP tools to write code,
+ * install packages, and test. Executes the Reviewer's Execution Blueprint.
+ * 
+ * Outputs "Raw Executed Code" and test results as ExecutedCode.
+ * 
+ * Preserves all existing integrations:
+ * - E2B Sandbox execution
+ * - MCP tool calling
+ * - Auto-correction patterns
+ * - Frontend/Backend specialization routing
+ * - Tag parsing (Lovable pattern)
  */
 
 import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { createModel } from '../models/model-registry.js';
 import { config } from '../config.js';
-import { OracleState, Subtask } from '../state/oracle-state.js';
+import {
+  OracleState,
+  Subtask,
+  ExecutedCode,
+  ExecutorResult,
+  TestResult,
+  ExecutionError,
+} from '../state/oracle-state.js';
 import { getToolsForAgent } from '../tools/tool-registry.js';
 import { EXECUTOR_SYSTEM_PROMPT } from '../prompts/executor.prompt.js';
+import { executorLogger } from '../monitoring/logger.js';
 
-// ─── Tag Parser de Respostas de LLM (Padrão Lovable) ──────────────────────────
+// ─── Tag Parser (Lovable Pattern — preserved) ───────────────────────────────
 
 function extract(content: string, tag: string): string | undefined {
-  const match = content.match(new RegExp(`<\\s*\${tag}[^>]*>([\\s\\S]*?)</\\s*\${tag}\\s*>`, 'i'));
+  const match = content.match(new RegExp(`<\\s*${tag}[^>]*>([\\s\\S]*?)</\\s*${tag}\\s*>`, 'i'));
   return match ? match[1].trim() : undefined;
 }
 
 function extractAll(content: string, tag: string): Array<{ content: string; path?: string }> {
-  const regex = new RegExp(`<\\s*\${tag}(?:\\s+path=["']([^"']+)["'])?[^>]*>([\\s\\S]*?)</\\s*\${tag}\\s*>`, 'gi');
+  const regex = new RegExp(`<\\s*${tag}(?:\\s+path=["']([^"']+)["'])?[^>]*>([\\s\\S]*?)</\\s*${tag}\\s*>`, 'gi');
   const results = [];
   let match;
   while ((match = regex.exec(content)) !== null) {
     results.push({
       path: match[1],
-      content: match[2].trim()
+      content: match[2].trim(),
     });
   }
   return results;
@@ -43,7 +62,7 @@ export function parseOracleTags(output: string) {
   };
 }
 
-// ─── Resultado de execução de subtask ─────────────────────────────────────────
+// ─── SubtaskResult type (preserved for compatibility) ────────────────────────
 
 export interface SubtaskResult {
   subtaskId: string;
@@ -56,14 +75,11 @@ export interface SubtaskResult {
   selfCorrectionAttempts?: number;
 }
 
-// ─── Auto-Correção: Padrões de erro conhecidos ──────────────────────────────
+// ─── Auto-Correction Patterns (preserved from Sprint 10) ────────────────────
 
 interface ErrorPattern {
-  /** Regex para detectar o padrão de erro no stderr/mensagem */
   pattern: RegExp;
-  /** Descrição legível do tipo de erro */
   description: string;
-  /** Função que gera o comando corretivo a partir do match */
   correctionCommand: (match: RegExpMatchArray, originalCommand: string) => string;
 }
 
@@ -73,10 +89,9 @@ const KNOWN_ERROR_PATTERNS: ErrorPattern[] = [
     description: 'Módulo Node.js não encontrado',
     correctionCommand: (match) => {
       const moduleName = match[1].startsWith('.')
-        ? '' // módulo local, não instalar
-        : match[1].split('/')[0].replace(/^@/, (m) => m); // escopo npm
+        ? ''
+        : match[1].split('/')[0].replace(/^@/, (m) => m);
       if (!moduleName) return '';
-      // Trata escopos npm como @scope/package
       const pkg = match[1].startsWith('@')
         ? match[1].split('/').slice(0, 2).join('/')
         : moduleName;
@@ -104,10 +119,7 @@ const KNOWN_ERROR_PATTERNS: ErrorPattern[] = [
   {
     pattern: /ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i,
     description: 'Módulo ESM/CJS não encontrado',
-    correctionCommand: (_match, originalCommand) => {
-      // Tenta reinstalar dependências do projeto
-      return 'npm install';
-    },
+    correctionCommand: () => 'npm install',
   },
   {
     pattern: /No module named ['"]?(\S+?)['"]?$/im,
@@ -134,10 +146,6 @@ const KNOWN_ERROR_PATTERNS: ErrorPattern[] = [
   },
 ];
 
-/**
- * Tenta identificar um padrão de erro conhecido e retorna o comando corretivo.
- * Retorna null se o erro não é reconhecido.
- */
 function detectCorrectiveAction(
   errorOutput: string,
   originalCommand: string
@@ -154,7 +162,7 @@ function detectCorrectiveAction(
   return null;
 }
 
-// ─── Tool-calling loop com Auto-Correção ─────────────────────────────────────
+// ─── Tool-calling loop with Auto-Correction (preserved) ─────────────────────
 
 export async function runToolLoop(
   systemPrompt: string,
@@ -176,20 +184,19 @@ export async function runToolLoop(
 
   const modelWithTools = model.bindTools ? model.bindTools(tools) : model;
 
-  // Injeta memória de curto prazo no prompt se disponível
   const memoryBlock = shortTermMemory.length > 0
     ? `\n\n<short_term_memory>\n${shortTermMemory.map((m, i) => `[${i + 1}] ${m}`).join('\n')}\n</short_term_memory>`
     : '';
 
   const messages: (HumanMessage | AIMessage | ToolMessage)[] = [
-    new HumanMessage(`\${systemPrompt}${memoryBlock}\n\n\${taskPrompt}`),
+    new HumanMessage(`${systemPrompt}${memoryBlock}\n\n${taskPrompt}`),
   ];
 
   const toolCallsExecuted: string[] = [];
   const filesModified: string[] = [];
   let finalResponseContent = '';
   let selfCorrectionAttempts = 0;
-  const MAX_SELF_CORRECTIONS = 3; // Máximo de tentativas de auto-correção por tool call
+  const MAX_SELF_CORRECTIONS = 3;
 
   for (let i = 0; i < maxIterations; i++) {
     const response = await modelWithTools.invoke(messages) as AIMessage;
@@ -198,8 +205,8 @@ export async function runToolLoop(
     const toolCalls = response.tool_calls ?? [];
     if (toolCalls.length === 0) {
       finalResponseContent = typeof response.content === 'string'
-          ? response.content
-          : JSON.stringify(response.content);
+        ? response.content
+        : JSON.stringify(response.content);
       return {
         output: finalResponseContent,
         toolCallsExecuted,
@@ -212,20 +219,18 @@ export async function runToolLoop(
     let loopOutput = typeof response.content === 'string' ? response.content : '';
     finalResponseContent += loopOutput + '\n';
 
-    // Executa cada tool call e acumula resultados
     for (const toolCall of toolCalls) {
       const tool = tools.find((t) => t.name === toolCall.name);
       if (!tool) {
         messages.push(new ToolMessage({
           tool_call_id: toolCall.id ?? '',
-          content: JSON.stringify({ error: `Tool "\${toolCall.name}" não encontrada.` }),
+          content: JSON.stringify({ error: `Tool "${toolCall.name}" não encontrada.` }),
         }));
         continue;
       }
 
       toolCallsExecuted.push(toolCall.name);
 
-      // Rastreia operações de arquivo
       if (toolCall.name.startsWith('file_')) {
         const path = (toolCall.args as Record<string, string>)['path'];
         if (path) filesModified.push(path);
@@ -235,10 +240,10 @@ export async function runToolLoop(
         const result = await tool.invoke(toolCall.args as Record<string, string>);
         const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
 
-        // ── Auto-Correção: Detecta erros em shell_exec ──────────────────
+        // Auto-Correction for shell_exec
         if (toolCall.name === 'shell_exec') {
           let parsed: { success?: boolean; error?: string; stderr?: string; command?: string } = {};
-          try { parsed = JSON.parse(resultStr); } catch { /* não é JSON */ }
+          try { parsed = JSON.parse(resultStr); } catch { /* not JSON */ }
 
           const errorOutput = parsed.error || parsed.stderr || '';
           const originalCommand = (toolCall.args as Record<string, string>)['command'] ?? '';
@@ -249,9 +254,7 @@ export async function runToolLoop(
             if (correction) {
               selfCorrectionAttempts++;
               console.log(`🔧 Auto-correção [${selfCorrectionAttempts}/${MAX_SELF_CORRECTIONS}]: ${correction.description}`);
-              console.log(`   Comando corretivo: ${correction.command}`);
 
-              // Informa o agente sobre o erro e a tentativa de correção
               messages.push(new ToolMessage({
                 tool_call_id: toolCall.id ?? '',
                 content: JSON.stringify({
@@ -264,7 +267,6 @@ export async function runToolLoop(
                 }),
               }));
 
-              // Executa o comando corretivo automaticamente
               const correctionTool = tools.find((t) => t.name === 'shell_exec');
               if (correctionTool) {
                 try {
@@ -272,29 +274,25 @@ export async function runToolLoop(
                   const fixStr = typeof fixResult === 'string' ? fixResult : JSON.stringify(fixResult);
                   toolCallsExecuted.push('shell_exec (auto-correction)');
 
-                  console.log(`   Resultado da correção: ${fixStr.substring(0, 200)}`);
-
-                  // Adiciona o resultado da correção como contexto para o agente
                   messages.push(new HumanMessage(
-                    `[ORACLE Auto-Correction] Detectei o erro "${correction.description}" no comando anterior. ` +
-                    `Executei automaticamente: \`${correction.command}\`\n` +
-                    `Resultado: ${fixStr}\n\n` +
-                    `Por favor, tente novamente o comando original ou ajuste conforme necessário.`
+                    `[ORACLE Auto-Correction] Detectei o erro "${correction.description}". ` +
+                    `Executei: \`${correction.command}\`\nResultado: ${fixStr}\n` +
+                    `Tente novamente o comando original ou ajuste conforme necessário.`
                   ));
                 } catch (fixErr) {
                   const fixErrMsg = fixErr instanceof Error ? fixErr.message : String(fixErr);
                   messages.push(new HumanMessage(
                     `[ORACLE Auto-Correction] Tentei corrigir "${correction.description}" com \`${correction.command}\`, ` +
-                    `mas a correção também falhou: ${fixErrMsg}. Tente uma abordagem alternativa.`
+                    `mas falhou: ${fixErrMsg}. Prossiga com abordagem alternativa.`
                   ));
                 }
               }
-              continue; // Pula para a próxima iteração, deixando o agente decidir o próximo passo
+              continue;
             }
           }
         }
 
-        // Resultado normal (sem auto-correção necessária)
+        // Normal result
         messages.push(new ToolMessage({
           tool_call_id: toolCall.id ?? '',
           content: resultStr,
@@ -309,7 +307,6 @@ export async function runToolLoop(
     }
   }
 
-  // Esgotou iterações
   return {
     output: 'Execução interrompida: máximo de iterações atingido.\n' + finalResponseContent,
     toolCallsExecuted,
@@ -319,7 +316,7 @@ export async function runToolLoop(
   };
 }
 
-// ─── Executa uma subtask individualmente ─────────────────────────────────────
+// ─── Execute a single subtask ────────────────────────────────────────────────
 
 export async function executeSubtask(
   subtask: Subtask,
@@ -329,16 +326,17 @@ export async function executeSubtask(
   const systemPrompt = EXECUTOR_SYSTEM_PROMPT;
 
   const taskPrompt = `<subtask>
-ID: \${subtask.id}
-Título: \${subtask.title}
-Descrição: \${subtask.description}
-Tipo: \${subtask.type}
-Agente: \${subtask.assignedAgent}
-Critério de validação: \${subtask.validationCriteria}
-Ferramentas MCP disponíveis: \${subtask.tools.join(', ')}
+ID: ${subtask.id}
+Título: ${subtask.title}
+Descrição: ${subtask.description}
+Tipo: ${subtask.type}
+Agente: ${subtask.assignedAgent}
+Critério de validação: ${subtask.validationCriteria}
+Ferramentas MCP disponíveis: ${subtask.tools.join(', ')}
 </subtask>
 
-Execute esta subtask passo a passo usando as ferramentas disponíveis. Não esqueça de utilizar as tags <oracle-thinking> e ao final <oracle-success> ou <oracle-error> explicadas no system prompt!`;
+Execute esta subtask passo a passo usando as ferramentas disponíveis no E2B Sandbox.
+Use as tags <oracle-thinking> e ao final <oracle-success> ou <oracle-error>.`;
 
   const { output, toolCallsExecuted, filesModified, parsedTags, selfCorrectionAttempts } = await runToolLoop(
     systemPrompt,
@@ -360,12 +358,166 @@ Execute esta subtask passo a passo usando as ferramentas disponíveis. Não esqu
   };
 }
 
-// ─── Função principal — nó LangGraph ─────────────────────────────────────────
+// ─── Executor Router (preserved from Sprint 10) ─────────────────────────────
+
+function executorRouter(state: OracleState): 'frontend_executor' | 'backend_executor' | 'executor' {
+  const subtask = state.subtasks[state.currentSubtask];
+  if (!subtask) return 'executor';
+
+  const typeLower = (subtask.type || '').toLowerCase();
+
+  if (typeLower.includes('react') || typeLower.includes('next') || typeLower.includes('component')) {
+    return 'frontend_executor';
+  }
+
+  if (typeLower.includes('api') || typeLower.includes('node') || typeLower.includes('python')) {
+    return 'backend_executor';
+  }
+
+  if (subtask.assignedAgent === 'frontend') return 'frontend_executor';
+  if (subtask.assignedAgent === 'backend') return 'backend_executor';
+
+  return 'executor';
+}
+
+export { executorRouter };
+
+// ─── Executor Node — LangGraph Node Function (Stage 3) ──────────────────────
 
 /**
- * executorAgent — nó LangGraph
- * Executa a subtask atual do estado, salva resultado e incrementa currentSubtask.
- * Agora com suporte a shortTermMemory para contexto entre agentes.
+ * executorNode — Nó LangGraph (Stage 3)
+ * 
+ * The ONLY node that uses E2B Sandbox and MCP tools.
+ * Executes all subtasks from the Execution Blueprint sequentially.
+ * Produces ExecutedCode output for the Synthesis node.
+ */
+export async function executorNode(
+  state: OracleState
+): Promise<Partial<OracleState>> {
+  executorLogger.info(`⚙️  [Executor] Iniciando execução do blueprint...`);
+
+  const subtasks = state.subtasks;
+  if (!subtasks || subtasks.length === 0) {
+    executorLogger.warn('⚠️  [Executor] Nenhuma subtask para executar.');
+    return {
+      currentStage: 'synthesis',
+      executedCode: {
+        results: {},
+        allFilesModified: [],
+        testResults: [],
+        packagesInstalled: [],
+        executionErrors: [],
+        timestamp: new Date().toISOString(),
+      },
+    };
+  }
+
+  const allResults: Record<string, ExecutorResult> = {};
+  const allFilesModified: string[] = [];
+  const allTestResults: TestResult[] = [];
+  const allPackagesInstalled: string[] = [];
+  const allExecutionErrors: ExecutionError[] = [];
+  const memoryEntries: string[] = [];
+  let currentSubtask = state.currentSubtask;
+
+  for (let i = currentSubtask; i < subtasks.length; i++) {
+    const subtask = subtasks[i];
+    const label = `${i + 1}/${subtasks.length} — ${subtask.title}`;
+    executorLogger.info(`⚙️  [Executor] Executando subtask ${label}`);
+
+    try {
+      const result = await executeSubtask(subtask, [
+        ...(state.shortTermMemory ?? []),
+        ...memoryEntries,
+      ]);
+
+      const executorResult: ExecutorResult = {
+        subtaskId: result.subtaskId,
+        status: result.status,
+        output: result.output,
+        toolCallsExecuted: result.toolCallsExecuted,
+        filesModified: result.filesModified,
+        timestamp: result.timestamp,
+        parsedTags: result.parsedTags,
+        selfCorrectionAttempts: result.selfCorrectionAttempts,
+      };
+
+      allResults[subtask.id] = executorResult;
+      allFilesModified.push(...result.filesModified);
+
+      if (result.parsedTags?.thinking) {
+        console.log(`[Thinking...] ${result.parsedTags.thinking.substring(0, 100)}...`);
+      }
+
+      if (result.selfCorrectionAttempts && result.selfCorrectionAttempts > 0) {
+        console.log(`🔧 Auto-correções: ${result.selfCorrectionAttempts}`);
+      }
+
+      const memoryEntry = `[Executor/${subtask.assignedAgent}] Subtask "${subtask.title}" → ${result.status}. ` +
+        `Tools: ${result.toolCallsExecuted.join(', ')}. Files: ${result.filesModified.join(', ')}.` +
+        (result.selfCorrectionAttempts ? ` Auto-correções: ${result.selfCorrectionAttempts}.` : '');
+      memoryEntries.push(memoryEntry);
+
+      // Track failed subtasks
+      if (result.status === 'failed') {
+        allExecutionErrors.push({
+          subtaskId: subtask.id,
+          error: result.output,
+          recoverable: true,
+          attemptCount: 1,
+        });
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error(`❌ [Executor] Falhou em ${subtask.id}:`, error.message);
+
+      allResults[subtask.id] = {
+        subtaskId: subtask.id,
+        status: 'failed',
+        output: error.message,
+        toolCallsExecuted: [],
+        filesModified: [],
+        timestamp: new Date().toISOString(),
+      };
+
+      allExecutionErrors.push({
+        subtaskId: subtask.id,
+        error: error.message,
+        recoverable: false,
+        attemptCount: 1,
+      });
+
+      const memoryEntry = `[Executor] Subtask "${subtask.title}" → FAILED: ${error.message}`;
+      memoryEntries.push(memoryEntry);
+    }
+
+    currentSubtask = i + 1;
+  }
+
+  const executedCode: ExecutedCode = {
+    results: allResults,
+    allFilesModified: [...new Set(allFilesModified)],
+    testResults: allTestResults,
+    packagesInstalled: allPackagesInstalled,
+    executionErrors: allExecutionErrors,
+    timestamp: new Date().toISOString(),
+  };
+
+  executorLogger.info(`⚙️  [Executor] Execução completa — ${Object.keys(allResults).length} subtasks processadas.`);
+
+  return {
+    executedCode,
+    results: { ...state.results, ...allResults },
+    currentSubtask: subtasks.length,
+    currentStage: 'synthesis',
+    shortTermMemory: [...(state.shortTermMemory ?? []), ...memoryEntries],
+  };
+}
+
+// ─── Legacy executorAgent (backward compatibility) ───────────────────────────
+
+/**
+ * @deprecated Use executorNode instead. Kept for backward compatibility.
  */
 export async function executorAgent(
   state: OracleState
@@ -376,23 +528,13 @@ export async function executorAgent(
     return { currentSubtask: state.currentSubtask };
   }
 
-  console.log(`⚙️  Executor [\${subtask.assignedAgent}]: \${subtask.title}`);
+  console.log(`⚙️  Executor [${subtask.assignedAgent}]: ${subtask.title}`);
 
   try {
     const result = await executeSubtask(subtask, state.shortTermMemory ?? []);
-    
-    if(result.parsedTags?.thinking) {
-        console.log(`[Thinking...] \${result.parsedTags.thinking.substring(0, 100)}...`);
-    }
 
-    if (result.selfCorrectionAttempts && result.selfCorrectionAttempts > 0) {
-      console.log(`🔧 Auto-correções realizadas: ${result.selfCorrectionAttempts}`);
-    }
-
-    // Adiciona resumo à memória de curto prazo
     const memoryEntry = `[Executor/${subtask.assignedAgent}] Subtask "${subtask.title}" → ${result.status}. ` +
-      `Tools: ${result.toolCallsExecuted.join(', ')}. Files: ${result.filesModified.join(', ')}.` +
-      (result.selfCorrectionAttempts ? ` Auto-correções: ${result.selfCorrectionAttempts}.` : '');
+      `Tools: ${result.toolCallsExecuted.join(', ')}. Files: ${result.filesModified.join(', ')}.`;
 
     return {
       results: { ...state.results, [subtask.id]: result },
@@ -401,7 +543,7 @@ export async function executorAgent(
     };
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    console.error(`❌ Executor falhou em \${subtask.id}:`, error.message);
+    console.error(`❌ Executor falhou em ${subtask.id}:`, error.message);
 
     const memoryEntry = `[Executor/${subtask.assignedAgent}] Subtask "${subtask.title}" → FAILED: ${error.message}`;
 

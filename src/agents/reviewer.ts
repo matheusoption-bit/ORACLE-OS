@@ -1,240 +1,269 @@
 /**
- * ORACLE-OS Reviewer Agent — Sprint 10
- * Avalia resultados dos executors, com shortTermMemory e geração de testes unitários
+ * ORACLE-OS Reviewer Node (Architect) — Quadripartite Architecture
+ * 
+ * Stage 2: Architecture & Security Review
+ * 
+ * Acts as a Red Team. Takes the Analyst's Context Document and criticizes it
+ * for architectural flaws, security risks, or redundancy BEFORE any code is written.
+ * 
+ * Outputs:
+ *   - 'approved' → Execution Blueprint with decomposed subtasks → goes to Executor
+ *   - 'needs_revision' → Sends feedback back to Analyst (max 3 iterations)
+ *   - 'rejected' → Hard stop, task is rejected
  */
 
 import { z } from 'zod';
 import { HumanMessage } from '@langchain/core/messages';
-import { DynamicStructuredTool } from '@langchain/core/tools';
 import { createModel } from '../models/model-registry.js';
 import { config } from '../config.js';
-import { OracleState } from '../state/oracle-state.js';
+import {
+  OracleState,
+  Subtask,
+  ExecutionBlueprint,
+} from '../state/oracle-state.js';
 import { REVIEWER_SYSTEM_PROMPT } from '../prompts/reviewer.prompt.js';
-import { shellExecTool, fileWriteTool, fileReadTool } from '../tools/tool-registry.js';
-import { runToolLoop } from './executor.js';
+import { reviewerLogger, systemLogger } from '../monitoring/logger.js';
 
-// ─── Schemas Zod ──────────────────────────────────────────────────────────────
+// ─── Zod Schemas ─────────────────────────────────────────────────────────────
 
-const ReviewSchema = z.object({
-  reviewStatus: z.enum(['approved', 'rejected', 'needs_revision']),
-  revisionNotes: z.string().optional(),
-  learnings: z.string().optional(),
+const SubtaskSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  type: z.enum(['code', 'file', 'search', 'review', 'other']),
+  priority: z.number().min(1).max(5),
+  dependsOn: z.array(z.string()).default([]),
+  assignedAgent: z.enum(['frontend', 'backend', 'devops', 'data', 'security', 'geral']).default('geral'),
+  dependencies: z.array(z.string()).default([]),
+  estimatedDuration: z.number().default(15),
+  tools: z.array(z.string()).default([]),
+  validationCriteria: z.string().default(''),
 });
 
-export type Review = z.infer<typeof ReviewSchema>;
+const BlueprintSchema = z.object({
+  status: z.enum(['approved', 'needs_revision', 'rejected']),
+  subtasks: z.array(SubtaskSchema).default([]),
+  executionPlan: z.enum(['sequential', 'parallel', 'mixed']).default('sequential'),
+  architecturalNotes: z.string().default(''),
+  securityRisks: z.array(z.string()).default([]),
+  redundanciesFound: z.array(z.string()).default([]),
+  feedbackToAnalyst: z.string().optional(),
+});
 
-// ─── Força aprovação após max tentativas ──────────────────────────────────────
+export type BlueprintOutput = z.infer<typeof BlueprintSchema>;
 
-function buildForceApproveResult(state: OracleState): Partial<OracleState> {
-  console.warn('⚠️  Reviewer: Máximo de tentativas atingido (3) — forçando aprovação com warnings.');
-  return {
-    reviewStatus: 'approved',
-    revisionNotes: '[AUTO-APROVADO] Limite de 3 iterações atingido. O loop foi encerrado forçadamente.',
-    iterationCount: state.iterationCount + 1,
-  };
-}
-
-// ─── Geração de Testes Unitários ─────────────────────────────────────────────
-
-const TEST_GENERATION_PROMPT = `Você é um engenheiro de qualidade especializado em testes unitários.
-Gere um arquivo de teste unitário para o código fornecido.
-
-## Regras
-- Use Vitest como framework de testes
-- Importe com \`import { describe, it, expect, vi } from 'vitest'\`
-- Teste os cenários principais: happy path, edge cases, error handling
-- Use mocks quando necessário (vi.mock, vi.fn)
-- O arquivo de teste deve ser autossuficiente e executável
-- Nomeie o arquivo como: \`<nome-original>.test.<ext>\`
-- Máximo de 50 linhas por arquivo de teste
-- Foque nos comportamentos mais críticos
-
-## Formato de Output
-Use a ferramenta file_write para criar o arquivo de teste.
-Depois use shell_exec para executar: npx vitest run <arquivo> --reporter=verbose 2>&1 || true
-Reporte o resultado.`;
+// ─── Reviewer Node — LangGraph Node Function ────────────────────────────────
 
 /**
- * Identifica arquivos de código (.ts, .tsx, .py) nos resultados que podem ter testes gerados.
+ * reviewerNode — Nó LangGraph (Stage 2)
+ * 
+ * Recebe o Context Document do Analyst, faz revisão arquitetural e de segurança,
+ * e produz um Execution Blueprint ou envia feedback para re-análise.
  */
-function extractCodeFilesFromResults(state: OracleState): string[] {
-  const codeFiles: string[] = [];
-  const codeExtensions = ['.ts', '.tsx', '.py', '.js', '.jsx'];
-
-  for (const result of Object.values(state.results)) {
-    const r = result as { filesModified?: string[]; status?: string };
-    if (r?.status === 'success' && r?.filesModified) {
-      for (const file of r.filesModified) {
-        const ext = '.' + (file.split('.').pop() ?? '');
-        if (codeExtensions.includes(ext) && !file.includes('.test.') && !file.includes('.spec.')) {
-          codeFiles.push(file);
-        }
-      }
-    }
-  }
-
-  return [...new Set(codeFiles)];
-}
-
-/**
- * Gera testes unitários para os arquivos de código aprovados.
- * Usa o runToolLoop do executor para gerar e executar os testes.
- */
-async function generateUnitTests(
-  codeFiles: string[],
-  state: OracleState
-): Promise<{ testsGenerated: string[]; testResults: string }> {
-  if (codeFiles.length === 0) {
-    return { testsGenerated: [], testResults: 'Nenhum arquivo de código para testar.' };
-  }
-
-  const tools: DynamicStructuredTool[] = [fileReadTool, fileWriteTool, shellExecTool];
-  const fileList = codeFiles.map((f) => `- ${f}`).join('\n');
-
-  const taskPrompt = `Gere testes unitários para os seguintes arquivos de código que foram aprovados na revisão:
-
-${fileList}
-
-Para cada arquivo:
-1. Leia o conteúdo com file_read
-2. Gere um arquivo de teste correspondente com file_write
-3. Execute o teste com shell_exec
-
-Priorize os arquivos mais críticos se houver muitos (máximo 3 arquivos de teste).`;
-
-  try {
-    const { output, filesModified } = await runToolLoop(
-      TEST_GENERATION_PROMPT,
-      taskPrompt,
-      tools,
-      6, // maxIterations reduzido para testes
-      state.shortTermMemory ?? []
-    );
-
-    const testFiles = filesModified.filter(
-      (f) => f.includes('.test.') || f.includes('.spec.')
-    );
-
-    console.log(`🧪 Testes gerados: ${testFiles.length} arquivos`);
-
-    return {
-      testsGenerated: testFiles,
-      testResults: output,
-    };
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ Falha na geração de testes (não crítico): ${errMsg}`);
-    return {
-      testsGenerated: [],
-      testResults: `Erro na geração de testes: ${errMsg}`,
-    };
-  }
-}
-
-// ─── Função principal — nó LangGraph ─────────────────────────────────────────
-
-export async function reviewerAgent(
+export async function reviewerNode(
   state: OracleState
 ): Promise<Partial<OracleState>> {
-  console.log(`🔍 Reviewer: Avaliando resultados (tentativa \${state.iterationCount + 1}/3)...`);
+  const iteration = state.iterationCount + 1;
+  const maxIterations = config.pipeline.maxReviewerAnalystIterations;
 
-  const nextIteration = state.iterationCount + 1;
+  reviewerLogger.info(`🏗️  [Reviewer] Revisão arquitetural — tentativa ${iteration}/${maxIterations}...`);
+
+  // Guard: se atingiu máximo de iterações, forçar aprovação
+  if (iteration > maxIterations) {
+    reviewerLogger.warn(`⚠️  [Reviewer] Máximo de iterações atingido (${maxIterations}) — forçando aprovação.`);
+    return buildForceApproveResult(state);
+  }
 
   const model = createModel({
     modelId: config.agents.reviewer.modelId,
     temperature: config.agents.reviewer.temperature,
   });
 
-  const structuredModel = model.withStructuredOutput(ReviewSchema);
-  const systemPrompt = REVIEWER_SYSTEM_PROMPT;
+  const structuredModel = model.withStructuredOutput(BlueprintSchema);
 
-  const resultsJson = JSON.stringify(state.results, null, 2);
-  const errorsJson = state.errors.length > 0
-    ? JSON.stringify(state.errors.map((e) => ({ message: e.message, name: e.name })), null, 2)
-    : '[]';
+  // Montar o prompt com o Context Document do Analyst
+  const contextDoc = state.contextDocument;
+  const contextDocStr = contextDoc
+    ? JSON.stringify(contextDoc, null, 2)
+    : '(Context Document não disponível — Analyst pode ter falhado)';
 
-  const subtasksSummary = state.subtasks
-    .map((s) => `- [\${s.id}] \${s.title} (\${s.type}, prioridade \${s.priority})`)
-    .join('\n');
-
-  // Injetar memória de curto prazo no prompt do reviewer
+  // Memória de curto prazo
   const memoryBlock = (state.shortTermMemory ?? []).length > 0
-    ? `\n<short_term_memory>\nHistórico de decisões e resultados neste ciclo:\n${state.shortTermMemory!.map((m, i) => `[${i + 1}] ${m}`).join('\n')}\n</short_term_memory>\n`
+    ? `\n<short_term_memory>\nHistórico de decisões e resultados neste ciclo:\n${state.shortTermMemory.map((m, i) => `[${i + 1}] ${m}`).join('\n')}\n</short_term_memory>\n`
     : '';
 
-  const userPrompt = `\${systemPrompt}
+  const userPrompt = `${REVIEWER_SYSTEM_PROMPT}
 
 <tarefa_original>
-\${state.task}
+${state.task}
 </tarefa_original>
 
-<subtasks_planejados>
-\${subtasksSummary}
-</subtasks_planejados>
-
-<resultados_dos_executors>
-\${resultsJson}
-</resultados_dos_executors>
-
-<erros_capturados>
-\${errorsJson}
-</erros_capturados>
+<context_document>
+${contextDocStr}
+</context_document>
 ${memoryBlock}
 <contexto_iteracao>
-Tentativa: \${nextIteration} de 3
-\${state.revisionNotes ? \`Notas da revisão anterior: \${state.revisionNotes}\` : ''}
+Tentativa: ${iteration} de ${maxIterations}
+${state.executionBlueprint?.feedbackToAnalyst ? `Feedback anterior enviado ao Analyst: ${state.executionBlueprint.feedbackToAnalyst}` : ''}
 </contexto_iteracao>
 
-Avalie o trabalho produzido e retorne sua decisão estruturada considerando as diretrizes e critérios.`;
+<available_tools>
+- file_read, file_write, file_list
+- shell_exec, shell_npm, shell_git
+- github_create_pr, github_list_issues
+- browser_navigate, browser_click, browser_screenshot
+- db_query, db_insert
+</available_tools>
+
+Revise o Context Document como um Red Team (arquitetura + segurança).
+Se aprovado, decomponha em subtasks executáveis.
+Se precisar de re-análise, forneça feedback específico para o Analyst.
+Retorne o Execution Blueprint JSON completo.`;
 
   try {
-    const review = await structuredModel.invoke([new HumanMessage(userPrompt)]);
-    let finalStatus = review.reviewStatus;
-    let finalNotes = review.revisionNotes;
+    const result = await structuredModel.invoke([new HumanMessage(userPrompt)]);
 
-    // Se a decisão for de rejeição ou revisão, verifica se atingimos limite de segurança
-    if ((finalStatus === 'rejected' || finalStatus === 'needs_revision') && nextIteration >= 3) {
-      console.warn('⚠️  Reviewer: Limite máximo configurado atingido. Forçando aprovação com aviso.');
+    let finalStatus = result.status;
+    let feedbackToAnalyst = result.feedbackToAnalyst;
+
+    // Guard: se rejeita ou pede revisão mas já atingiu limite, forçar aprovação
+    if ((finalStatus === 'rejected' || finalStatus === 'needs_revision') && iteration >= maxIterations) {
+      reviewerLogger.warn(`⚠️  [Reviewer] Limite de iterações atingido. Forçando aprovação com warnings.`);
       finalStatus = 'approved';
-      finalNotes = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED]\nTentativas se esgotaram.\nÚltimo feedback: \${finalNotes || 'Nenhum'}`;
-    }
-    
-    if(review.learnings) {
-        console.log(`[Learnings Extraídas] \${review.learnings.substring(0, 100)}...`);
+      feedbackToAnalyst = `[FORCED APPROVAL] Limite de ${maxIterations} iterações atingido. Último feedback: ${feedbackToAnalyst || 'Nenhum'}`;
     }
 
-    // ── Geração de Testes Unitários (se aprovado) ────────────────────────
+    // Mapear subtasks com retrocompatibilidade
+    const subtasks: Subtask[] = (result.subtasks || []).map((s) => ({
+      ...s,
+      dependencies: s.dependsOn,
+      assignedAgent: ['frontend', 'backend', 'devops', 'data', 'security'].includes(s.assignedAgent)
+        ? s.assignedAgent as Subtask['assignedAgent']
+        : 'geral',
+    }));
+
+    // Limitar número de subtasks
+    const limitedSubtasks = subtasks.slice(0, config.pipeline.maxSubtasksPerBlueprint);
+
+    const blueprint: ExecutionBlueprint = {
+      status: finalStatus,
+      subtasks: limitedSubtasks,
+      executionPlan: result.executionPlan,
+      architecturalNotes: result.architecturalNotes,
+      securityRisks: result.securityRisks,
+      redundanciesFound: result.redundanciesFound,
+      feedbackToAnalyst,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Determinar próximo estágio
+    let nextStage: OracleState['currentStage'];
+    let reviewStatus: OracleState['reviewStatus'];
+
     if (finalStatus === 'approved') {
-      console.log('🧪 Reviewer aprovado — iniciando geração de testes unitários...');
-      const codeFiles = extractCodeFilesFromResults(state);
-
-      if (codeFiles.length > 0) {
-        const { testsGenerated, testResults } = await generateUnitTests(codeFiles, state);
-
-        if (testsGenerated.length > 0) {
-          finalNotes = (finalNotes ?? '') +
-            `\n\n[TESTES UNITÁRIOS GERADOS]\nArquivos: ${testsGenerated.join(', ')}\nResultado: ${testResults.substring(0, 500)}`;
-        }
-      } else {
-        console.log('🧪 Nenhum arquivo de código encontrado para gerar testes.');
-      }
+      nextStage = 'executor';
+      reviewStatus = 'approved';
+      reviewerLogger.info(`✅ [Reviewer] Blueprint APROVADO — ${limitedSubtasks.length} subtasks para execução.`);
+    } else if (finalStatus === 'needs_revision') {
+      nextStage = 'analyst';
+      reviewStatus = 'needs_revision';
+      reviewerLogger.info(`🔄 [Reviewer] Enviando feedback ao Analyst para re-análise.`);
+    } else {
+      nextStage = 'completed';
+      reviewStatus = 'rejected';
+      reviewerLogger.error(`❌ [Reviewer] Blueprint REJEITADO.`);
     }
+
+    // Memória de curto prazo
+    const memoryEntry = `[Reviewer] Tentativa ${iteration}/${maxIterations} → ${finalStatus}. ` +
+      `Subtasks: ${limitedSubtasks.length}. ` +
+      `Riscos de segurança: ${result.securityRisks.length}. ` +
+      `Redundâncias: ${result.redundanciesFound.length}.` +
+      (feedbackToAnalyst ? ` Feedback: ${feedbackToAnalyst.substring(0, 150)}` : '');
 
     return {
-      reviewStatus: finalStatus,
-      revisionNotes: finalNotes,
-      iterationCount: nextIteration,
+      executionBlueprint: blueprint,
+      subtasks: limitedSubtasks,
+      currentSubtask: 0,
+      currentStage: nextStage,
+      reviewStatus,
+      revisionNotes: result.architecturalNotes,
+      iterationCount: iteration,
+      shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
     };
   } catch (err) {
-    console.error('❌ Erro no Reviewer Agent:', err);
-    if (nextIteration >= 3) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    console.error('❌ [Reviewer] Erro na revisão:', error.message);
+
+    if (iteration >= maxIterations) {
       return buildForceApproveResult(state);
     }
+
+    const memoryEntry = `[Reviewer] ERRO na tentativa ${iteration}: ${error.message}`;
+
     return {
       reviewStatus: 'needs_revision',
-      revisionNotes: 'Falha interna ao analisar resposta do modelo no Revisor.',
-      iterationCount: nextIteration,
-      errors: [...state.errors, err instanceof Error ? err : new Error(String(err))]
+      revisionNotes: `Falha interna no Reviewer: ${error.message}`,
+      iterationCount: iteration,
+      currentStage: 'analyst',
+      errors: [...(state.errors ?? []), error],
+      shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
     };
   }
+}
+
+// ─── Force Approve Helper ────────────────────────────────────────────────────
+
+function buildForceApproveResult(state: OracleState): Partial<OracleState> {
+  systemLogger.warn('⚠️  [Reviewer] Forçando aprovação — máximo de iterações excedido.');
+
+  // Se já temos um blueprint parcial, usar suas subtasks
+  const existingSubtasks = state.executionBlueprint?.subtasks ?? state.subtasks ?? [];
+
+  // Se não temos subtasks, criar uma genérica baseada na task
+  const subtasks: Subtask[] = existingSubtasks.length > 0
+    ? existingSubtasks
+    : [{
+        id: 'auto-1',
+        title: state.task.substring(0, 80),
+        description: state.task,
+        type: 'code',
+        priority: 1,
+        dependsOn: [],
+        assignedAgent: 'geral',
+        dependencies: [],
+        estimatedDuration: 30,
+        tools: ['file_read', 'file_write', 'shell_exec'],
+        validationCriteria: 'Task executada sem erros críticos',
+      }];
+
+  const blueprint: ExecutionBlueprint = {
+    status: 'approved',
+    subtasks,
+    executionPlan: 'sequential',
+    architecturalNotes: '[AUTO-APROVADO] Limite de iterações atingido. Prosseguindo com blueprint mínimo.',
+    securityRisks: [],
+    redundanciesFound: [],
+    feedbackToAnalyst: undefined,
+    timestamp: new Date().toISOString(),
+  };
+
+  const memoryEntry = `[Reviewer] AUTO-APROVAÇÃO forçada após ${state.iterationCount + 1} iterações.`;
+
+  return {
+    executionBlueprint: blueprint,
+    subtasks,
+    currentSubtask: 0,
+    currentStage: 'executor',
+    reviewStatus: 'approved',
+    revisionNotes: '[AUTO-APROVADO] Limite de iterações atingido.',
+    iterationCount: state.iterationCount + 1,
+    shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
+  };
+}
+
+// ─── Legacy export for backward compatibility ────────────────────────────────
+
+export async function reviewerAgent(state: OracleState): Promise<Partial<OracleState>> {
+  return reviewerNode(state);
 }

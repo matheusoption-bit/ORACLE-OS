@@ -89,10 +89,14 @@ export class OracleLogger {
   }
 }
 
-// ─── Instâncias pré-criadas ───────────────────────────────────────────────────
-export const plannerLogger  = new OracleLogger('Planner');
-export const executorLogger = new OracleLogger('Executor');
-export const reviewerLogger = new OracleLogger('Reviewer');
-export const systemLogger   = new OracleLogger('System');
-export const ragLogger      = new OracleLogger('RAG');
-export const toolLogger     = new OracleLogger('Tool');
+// ─── Instâncias pré-criadas (Quadripartite) ──────────────────────────────────
+export const analystLogger   = new OracleLogger('Analyst');
+export const reviewerLogger  = new OracleLogger('Reviewer');
+export const executorLogger  = new OracleLogger('Executor');
+export const synthesisLogger = new OracleLogger('Synthesis');
+export const systemLogger    = new OracleLogger('System');
+export const ragLogger       = new OracleLogger('RAG');
+export const toolLogger      = new OracleLogger('Tool');
+
+/** @deprecated Use analystLogger instead */
+export const plannerLogger   = analystLogger;

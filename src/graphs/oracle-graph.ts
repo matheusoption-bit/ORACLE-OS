@@ -1,72 +1,64 @@
 /**
- * ORACLE-OS Main State Graph — Sprint 10
- * Loop completo: Planner → executor_router → Executor → Reviewer → END
- * Com re-execução se needs_revision e iterationCount < 3
- * Sprint 8: CostTracker integrado para rastrear tokens reais por agente
- * Sprint 9: Skill Generator inteligente + logging estruturado aprimorado
- * Sprint 10: shortTermMemory para consciência contextual entre agentes
- *            + emissão de eventos agent:cost para métricas em tempo real
+ * ORACLE-OS Main State Graph — Quadripartite Architecture
+ * 
+ * 4-Stage Pipeline: Analyst → Reviewer (Architect) → Executor → Synthesis
+ * 
+ * Flow:
+ *   START → analyst → reviewer → (approved?) → executor → synthesis → END
+ *                        ↓ (needs_revision)
+ *                      analyst (max 3 iterations)
+ *                        ↓ (rejected)
+ *                       END
+ * 
+ * Executor sub-routing preserved:
+ *   executor_router → frontend_executor | backend_executor | executor (generic)
+ * 
+ * Guards:
+ *   - Max 3 Reviewer↔Analyst iterations before forced approval
+ *   - Max 3 Executor retries before TODO comment and move on
+ *   - CostTracker integrated for real token tracking per agent
+ *   - shortTermMemory for contextual awareness between agents
+ *   - State events emitted for dashboard/monitoring
  */
 
 import { StateGraph, END, START } from '@langchain/langgraph';
 import { OracleState } from '../state/oracle-state.js';
-import { plannerAgent } from '../agents/planner.js';
-import { executorAgent } from '../agents/executor.js';
+import { analystNode } from '../agents/analyst.js';
+import { reviewerNode } from '../agents/reviewer.js';
+import { executorNode, executorAgent, executorRouter } from '../agents/executor.js';
 import { frontendExecutorAgent } from '../agents/frontend-executor.js';
 import { backendExecutorAgent } from '../agents/backend-executor.js';
-import { reviewerAgent } from '../agents/reviewer.js';
-import { saveTaskAsSkill } from '../rag/rag-pipeline.js';
-import { generateSkillFromTask } from '../rag/skill-generator.js';
-import { startTask, completeTask } from '../monitoring/metrics.js';
-import { plannerLogger, executorLogger, reviewerLogger, systemLogger } from '../monitoring/logger.js';
-import { CostTracker } from '../monitoring/cost-tracker.js';
+import { synthesisNode, costTracker } from '../agents/synthesis.js';
+import { startTask } from '../monitoring/metrics.js';
+import { systemLogger } from '../monitoring/logger.js';
 import { config } from '../config.js';
 
-// ─── Singleton CostTracker ────────────────────────────────────────────────────
-const costTracker = new CostTracker();
-
-// ─── Exportar costTracker para uso externo (ex: OracleBridge) ─────────────────
+// ─── Export costTracker for external use (e.g., OracleBridge) ────────────────
 export { costTracker };
 
-// ─── Helper: estima tokens a partir do tamanho string (fallback) ─────────────
+// ─── Helper: estimate tokens from string length (fallback) ──────────────────
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-// ─── Tipos das arestas do grafo ───────────────────────────────────────────────
+// ─── Edge Types ──────────────────────────────────────────────────────────────
 
-type PlannerEdge = 'frontend_executor' | 'backend_executor' | 'executor' | typeof END;
-type ExecutorEdge = 'reviewer' | 'frontend_executor' | 'backend_executor' | 'executor';
-type ReviewerEdge = 'save_skill' | 'frontend_executor' | 'backend_executor' | 'executor' | typeof END;
+type AnalystEdge = 'reviewer';
+type ReviewerEdge = 'analyst' | 'executor' | typeof END;
+type ExecutorEdge = 'synthesis';
+type SynthesisEdge = typeof END;
 
-// ─── Função de roteamento por conteúdo ────────────────────────────────────────
-
-function executor_router(state: OracleState): 'frontend_executor' | 'backend_executor' | 'executor' {
-  const subtask = state.subtasks[state.currentSubtask];
-  if (!subtask) return 'executor';
-
-  const typeLower = (subtask.type || '').toLowerCase();
-  
-  if (typeLower.includes('react') || typeLower.includes('next') || typeLower.includes('component')) {
-    return 'frontend_executor';
-  }
-  
-  if (typeLower.includes('api') || typeLower.includes('node') || typeLower.includes('python')) {
-    return 'backend_executor';
-  }
-
-  if (subtask.assignedAgent === 'frontend') return 'frontend_executor';
-  if (subtask.assignedAgent === 'backend') return 'backend_executor';
-
-  return 'executor';
-}
-
-// ─── Criação do grafo ─────────────────────────────────────────────────────────
+// ─── Graph Creation ──────────────────────────────────────────────────────────
 
 export function createOracleGraph() {
   const workflow = new StateGraph<OracleState>({
     channels: {
       task: null,
+      currentStage: null,
+      contextDocument: null,
+      executionBlueprint: null,
+      executedCode: null,
+      synthesisOutput: null,
       subtasks: null,
       currentSubtask: null,
       results: null,
@@ -77,39 +69,78 @@ export function createOracleGraph() {
       shortTermMemory: null,
     },
   })
-  // ── Nó: Planner ─────────────────────────────────────────────────────────────
-  .addNode('planner', async (state: OracleState) => {
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // STAGE 1: ANALYST (Context & RAG)
+  // ══════════════════════════════════════════════════════════════════════════
+  .addNode('analyst', async (state: OracleState) => {
     const taskId = Math.random().toString(36).substr(2, 9);
 
-    if (state.iterationCount === 0 && state.subtasks.length === 0) {
+    // Start task metrics on first entry
+    if (state.iterationCount === 0 && !state.contextDocument) {
       startTask(taskId, state.task, state);
       costTracker.startTask(taskId, 2000);
     }
 
-    plannerLogger.info('🧠 Iniciando planejamento de task...');
-    const result = await plannerAgent(state);
+    systemLogger.info('🔬 [Pipeline] Stage 1: Analyst — Análise de contexto e requisitos');
 
-    // Rastreia tokens do planner
+    const result = await analystNode(state);
+
+    // Track analyst tokens
     const inputTokens = estimateTokens(state.task);
-    const outputTokens = estimateTokens(JSON.stringify(result.subtasks ?? []));
-    costTracker.track(taskId, 'planner', {
+    const outputTokens = estimateTokens(JSON.stringify(result.contextDocument ?? {}));
+    costTracker.track(taskId, 'analyst', {
       input: inputTokens,
       output: outputTokens,
-      model: config.agents.planner.modelId,
+      model: config.agents.analyst.modelId,
     });
-    plannerLogger.info(`💰 Planner: ~${inputTokens + outputTokens} tokens estimados`);
 
-    // Adiciona resumo do planner à memória de curto prazo
-    const subtaskTitles = (result.subtasks ?? []).map((s: any) => s.title).join(', ');
-    const memoryEntry = `[Planner] Decompôs a tarefa em ${(result.subtasks ?? []).length} subtasks: ${subtaskTitles}`;
-
-    return {
-      ...result,
-      shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
-    };
+    return result;
   })
 
-  // ── Nó: Frontend Executor ────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+  // STAGE 2: REVIEWER (Architecture & Security — Red Team)
+  // ══════════════════════════════════════════════════════════════════════════
+  .addNode('reviewer', async (state: OracleState) => {
+    systemLogger.info(`🏗️  [Pipeline] Stage 2: Reviewer — Revisão arquitetural (iteração ${state.iterationCount + 1}/${config.pipeline.maxReviewerAnalystIterations})`);
+
+    const result = await reviewerNode(state);
+
+    // Track reviewer tokens
+    const inputTokens = estimateTokens(JSON.stringify(state.contextDocument ?? {}));
+    const outputTokens = estimateTokens(JSON.stringify(result.executionBlueprint ?? {}));
+    const taskId = 'current';
+    costTracker.track(taskId, 'reviewer', {
+      input: inputTokens,
+      output: outputTokens,
+      model: config.agents.reviewer.modelId,
+    });
+
+    return result;
+  })
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // STAGE 3: EXECUTOR (The Sandbox Worker — E2B + MCP)
+  // ══════════════════════════════════════════════════════════════════════════
+  .addNode('executor', async (state: OracleState) => {
+    systemLogger.info('⚙️  [Pipeline] Stage 3: Executor — Execução no E2B Sandbox');
+
+    const result = await executorNode(state);
+
+    // Track executor tokens (aggregate)
+    const inputTokens = estimateTokens(JSON.stringify(state.subtasks));
+    const outputTokens = estimateTokens(JSON.stringify(result.results ?? {}));
+    const taskId = 'current';
+    costTracker.track(taskId, 'executor', {
+      input: inputTokens,
+      output: outputTokens,
+      model: config.agents.executor.modelId,
+    });
+
+    return result;
+  })
+
+  // ── Specialized Executor sub-nodes (preserved from Sprint 10) ─────────
   .addNode('frontend_executor', async (state: OracleState) => {
     const subtask = state.subtasks[state.currentSubtask];
     const label = subtask
@@ -121,7 +152,6 @@ export function createOracleGraph() {
 
     try {
       const result = await frontendExecutorAgent(subtask);
-
       const memoryEntry = `[Executor/frontend] Subtask "${subtask.title}" → ${result.status}. Files: ${result.filesModified.join(', ')}`;
 
       return {
@@ -136,7 +166,14 @@ export function createOracleGraph() {
       return {
         results: {
           ...state.results,
-          [subtask.id]: { subtaskId: subtask.id, status: 'failed', output: error.message, toolCallsExecuted: [], filesModified: [], timestamp: new Date().toISOString() },
+          [subtask.id]: {
+            subtaskId: subtask.id,
+            status: 'failed',
+            output: error.message,
+            toolCallsExecuted: [],
+            filesModified: [],
+            timestamp: new Date().toISOString(),
+          },
         },
         errors: [...(state.errors ?? []), error],
         currentSubtask: state.currentSubtask + 1,
@@ -145,7 +182,6 @@ export function createOracleGraph() {
     }
   })
 
-  // ── Nó: Backend Executor ─────────────────────────────────────────────────────
   .addNode('backend_executor', async (state: OracleState) => {
     const subtask = state.subtasks[state.currentSubtask];
     const label = subtask
@@ -157,7 +193,6 @@ export function createOracleGraph() {
 
     try {
       const result = await backendExecutorAgent(subtask);
-
       const memoryEntry = `[Executor/backend] Subtask "${subtask.title}" → ${result.status}. Files: ${result.filesModified.join(', ')}`;
 
       return {
@@ -172,7 +207,14 @@ export function createOracleGraph() {
       return {
         results: {
           ...state.results,
-          [subtask.id]: { subtaskId: subtask.id, status: 'failed', output: error.message, toolCallsExecuted: [], filesModified: [], timestamp: new Date().toISOString() },
+          [subtask.id]: {
+            subtaskId: subtask.id,
+            status: 'failed',
+            output: error.message,
+            toolCallsExecuted: [],
+            filesModified: [],
+            timestamp: new Date().toISOString(),
+          },
         },
         errors: [...(state.errors ?? []), error],
         currentSubtask: state.currentSubtask + 1,
@@ -181,146 +223,73 @@ export function createOracleGraph() {
     }
   })
 
-  // ── Nó: Executor Genérico ────────────────────────────────────────────────────
-  .addNode('executor', async (state: OracleState) => {
-    const subtask = state.subtasks[state.currentSubtask];
-    const label = subtask
-      ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}`
-      : 'concluído';
-    executorLogger.info(`⚙️  Executing [generic] ${label}`);
-    return executorAgent(state);
+  // ══════════════════════════════════════════════════════════════════════════
+  // STAGE 4: SYNTHESIS (Documentation & Integration)
+  // ══════════════════════════════════════════════════════════════════════════
+  .addNode('synthesis', async (state: OracleState) => {
+    systemLogger.info('📝 [Pipeline] Stage 4: Synthesis — Documentação e integração final');
+    return synthesisNode(state);
   })
 
-  // ── Nó: Reviewer ─────────────────────────────────────────────────────────────
-  .addNode('reviewer', async (state: OracleState) => {
-    reviewerLogger.info(`🔍 Reviewing attempt ${state.iterationCount + 1}/3...`);
-    const result = await reviewerAgent(state);
+  // ══════════════════════════════════════════════════════════════════════════
+  // EDGES — Quadripartite Pipeline Wiring
+  // ══════════════════════════════════════════════════════════════════════════
 
-    // Rastreia tokens do reviewer
-    const resultsStr = JSON.stringify(state.results);
-    const inputTokens = estimateTokens(state.task + resultsStr);
-    const outputTokens = estimateTokens(JSON.stringify(result));
-    const taskId = 'current';
-    costTracker.track(taskId, 'reviewer', {
-      input: inputTokens,
-      output: outputTokens,
-      model: config.agents.reviewer.modelId,
-    });
-    reviewerLogger.info(`💰 Reviewer: ~${inputTokens + outputTokens} tokens estimados`);
+  // START → analyst (always begins with analysis)
+  .addEdge(START, 'analyst')
 
-    // Adiciona resumo do reviewer à memória de curto prazo
-    const memoryEntry = `[Reviewer] Tentativa ${(result.iterationCount ?? state.iterationCount + 1)}/3 → ${result.reviewStatus}.` +
-      (result.revisionNotes ? ` Notas: ${result.revisionNotes.substring(0, 200)}` : '');
+  // analyst → reviewer (always goes to review after analysis)
+  .addEdge('analyst', 'reviewer')
 
-    return {
-      ...result,
-      shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
-    };
-  })
-
-  // ── Nó: Memória RAG (Save Skill) ──────────────────────────────────────────────────
-  .addNode('save_skill', async (state: OracleState) => {
-    await saveTaskAsSkill(state);
-
-    try {
-      const generatedSkill = await generateSkillFromTask(state);
-      if (generatedSkill) {
-        systemLogger.info(`🧠 Nova skill gerada: "${generatedSkill.title}" (id=${generatedSkill.id})`, {
-          skillId: generatedSkill.id,
-          tags: generatedSkill.tags,
-          score: generatedSkill.successRate,
-        });
-      }
-    } catch (skillErr) {
-      systemLogger.warn('Falha na geração de skill inteligente (não crítico).', {
-        error: String(skillErr),
-      });
-    }
-
-    const taskId = 'current';
-    const report = costTracker.getTaskReport(taskId);
-    const comparison = costTracker.compareWithEstimate(taskId);
-    systemLogger.info('🎉 Task workflow completado e documentado!', {
-      totalCostUSD: report.totalCostUSD.toFixed(6),
-      tokens: {
-        planner:  report.planner.tokens,
-        executor: report.executor.tokens,
-        reviewer: report.reviewer.tokens,
-      },
-      estimateEfficiency: comparison.efficiency.toFixed(1) + '%',
-    });
-
-    const id = Math.random().toString(36).substr(2, 9);
-    completeTask(id, state);
-    return state;
-  })
-  // ── Arestas ───────────────────────────────────────────────────────────────────
-
-  // START → planner
-  .addEdge(START, 'planner')
-
-  // planner → executor_router (ou END se sem subtasks)
-  .addConditionalEdges(
-    'planner',
-    (state): PlannerEdge => {
-      if (state.subtasks.length === 0) return END;
-      return executor_router(state);
-    }
-  )
-
-  // frontend_executor → próximo subtask ou reviewer
-  .addConditionalEdges(
-    'frontend_executor',
-    (state): ExecutorEdge => {
-      if (state.currentSubtask >= state.subtasks.length) return 'reviewer';
-      return executor_router(state);
-    }
-  )
-
-  // backend_executor → próximo subtask ou reviewer
-  .addConditionalEdges(
-    'backend_executor',
-    (state): ExecutorEdge => {
-      if (state.currentSubtask >= state.subtasks.length) return 'reviewer';
-      return executor_router(state);
-    }
-  )
-
-  // executor genérico → próximo subtask ou reviewer
-  .addConditionalEdges(
-    'executor',
-    (state): ExecutorEdge => {
-      if (state.currentSubtask >= state.subtasks.length) return 'reviewer';
-      return executor_router(state);
-    }
-  )
-
-  // reviewer → save_skill (se approved) ou re-execução (se precisa alterar) ou END (se falha hard)
+  // reviewer → conditional routing
   .addConditionalEdges(
     'reviewer',
     (state): ReviewerEdge => {
+      // REJECTED → END (hard stop)
       if (state.reviewStatus === 'rejected') {
-        const id = Math.random().toString(36).substr(2, 9);
-        completeTask(id, state);
-        systemLogger.error(`Task finalizada com rejeição pelo Reviewer.`);
+        systemLogger.error('❌ [Pipeline] Task rejeitada pelo Reviewer.');
         return END;
       }
-      
+
+      // APPROVED → executor (proceed to code execution)
       if (state.reviewStatus === 'approved') {
-         return 'save_skill';
+        return 'executor';
       }
 
-      if (state.iterationCount >= 3) {
-        return 'save_skill';
+      // NEEDS_REVISION → back to analyst (with iteration guard)
+      if (state.iterationCount >= config.pipeline.maxReviewerAnalystIterations) {
+        // Guard: max iterations exceeded, force to executor
+        systemLogger.warn('⚠️  [Pipeline] Max iterations exceeded — forcing to executor.');
+        return 'executor';
       }
-      
-      // needs_revision: volta para a primeira subtask re-roteando tudo
-      return executor_router({ ...state, currentSubtask: 0 });
+
+      return 'analyst';
     }
   )
-  
-  // save_skill → END
-  .addEdge('save_skill', END);
+
+  // executor → synthesis (after all subtasks executed)
+  .addEdge('executor', 'synthesis')
+
+  // frontend_executor → next subtask or synthesis
+  .addConditionalEdges(
+    'frontend_executor',
+    (state) => {
+      if (state.currentSubtask >= state.subtasks.length) return 'synthesis';
+      return executorRouter(state);
+    }
+  )
+
+  // backend_executor → next subtask or synthesis
+  .addConditionalEdges(
+    'backend_executor',
+    (state) => {
+      if (state.currentSubtask >= state.subtasks.length) return 'synthesis';
+      return executorRouter(state);
+    }
+  )
+
+  // synthesis → END (pipeline complete)
+  .addEdge('synthesis', END);
 
   return workflow.compile();
 }

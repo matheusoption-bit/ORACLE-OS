@@ -1,25 +1,36 @@
+/**
+ * ORACLE-OS Health Check — Quadripartite Architecture
+ * Checks all 4 agents: Analyst, Reviewer, Executor, Synthesis
+ */
+
 import { existsSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 import { config } from '../config.js';
 import { COLORS } from './logger.js';
 
 export async function checkHealth() {
-  console.log(`\n${COLORS.cyan}🔍 Executando ORACLE-OS Health Check...${COLORS.reset}\n`);
+  console.log(`\n${COLORS.cyan}🔍 Executando ORACLE-OS Health Check (Quadripartite)...${COLORS.reset}\n`);
 
   let isHealthy = true;
 
-  // 1. Checar ENV de Providers configurados
-  console.log(`${COLORS.dim}── LLM Providers ──${COLORS.reset}`);
+  // 1. Checar ENV de Providers configurados (4 agents)
+  console.log(`${COLORS.dim}── LLM Providers (Quadripartite) ──${COLORS.reset}`);
   
   const activeProviders = [
-    config.agents.planner.modelId,
+    config.agents.analyst.modelId,
+    config.agents.reviewer.modelId,
     config.agents.executor.modelId,
-    config.agents.reviewer.modelId
+    config.agents.synthesis.modelId,
   ];
+
+  console.log(`  🔬 Analyst   : ${config.agents.analyst.modelId}`);
+  console.log(`  🏗️  Reviewer  : ${config.agents.reviewer.modelId}`);
+  console.log(`  ⚙️  Executor  : ${config.agents.executor.modelId}`);
+  console.log(`  📝 Synthesis : ${config.agents.synthesis.modelId}`);
 
   const needsOpenAI = activeProviders.some(m => m.includes('gpt'));
   const needsAnthropic = activeProviders.some(m => m.includes('claude'));
-  const needsGroq = activeProviders.some(m => m.includes('llama') || m.includes('mixtral')); // Assuming groq handles these logic gates if specified
+  const needsGroq = activeProviders.some(m => m.includes('llama') || m.includes('mixtral'));
   const needsGoogle = activeProviders.some(m => m.includes('gemini'));
 
   if (needsOpenAI && !process.env.OPENAI_API_KEY) {
@@ -46,17 +57,23 @@ export async function checkHealth() {
     console.log(`  ✅ Gemini: OK`);
   }
 
-  // 2. Checar Memória local (RAG)
+  // 2. Checar Pipeline Config
+  console.log(`\n${COLORS.dim}── Pipeline Config ──${COLORS.reset}`);
+  console.log(`  🔄 Max Reviewer↔Analyst iterations: ${config.pipeline.maxReviewerAnalystIterations}`);
+  console.log(`  🔁 Max Executor retries: ${config.pipeline.maxExecutorRetries}`);
+  console.log(`  📦 Max subtasks per blueprint: ${config.pipeline.maxSubtasksPerBlueprint}`);
+
+  // 3. Checar Memória local (RAG)
   console.log(`\n${COLORS.dim}── Persistência RAG (Skills) ──${COLORS.reset}`);
   const skillsDir = resolve(process.cwd(), 'rag', 'skills');
   if (existsSync(skillsDir)) {
     const files = readdirSync(skillsDir).filter(f => f.endsWith('.json'));
-    console.log(`  ✅ Pasta Skills: OK (${files.length} mock/skills aprendidas)`);
+    console.log(`  ✅ Pasta Skills: OK (${files.length} skills aprendidas)`);
   } else {
-    console.log(`  ⚠️ Pasta Skills: Inexistente (Vazia/Sem Cold Start)`);
+    console.log(`  ⚠️ Pasta Skills: Inexistente (Cold Start)`);
   }
 
-  // 3. Checar banco local
+  // 4. Checar banco local
   const monitoringFile = resolve(process.cwd(), 'monitoring', 'metrics.json');
   console.log(`\n${COLORS.dim}── Monitoramento (Metrics) ──${COLORS.reset}`);
   if (existsSync(monitoringFile)) {
@@ -67,7 +84,7 @@ export async function checkHealth() {
 
   console.log(`\n${COLORS.cyan}══════════════════════════════════════${COLORS.reset}`);
   if (isHealthy) {
-    console.log(`${COLORS.green}✅ System STATUS: All Green. Ready for Production.${COLORS.reset}\n`);
+    console.log(`${COLORS.green}✅ System STATUS: All Green. Quadripartite Pipeline Ready.${COLORS.reset}\n`);
   } else {
     console.log(`${COLORS.red}❌ System STATUS: Critical failures detected! Resolva os alertas.${COLORS.reset}\n`);
   }

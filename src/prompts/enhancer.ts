@@ -22,7 +22,7 @@ export class PromptEnhancer {
     recentTasks?: string[];
   }): Promise<EnhancedPrompt> {
     const model = createModel({
-      modelId: config.agents.planner.modelId, // Use the planner model for reasoning
+      modelId: config.agents.analyst.modelId, // Use the analyst model for reasoning
       temperature: 0.2, // Low temperature for consistent output
     });
 

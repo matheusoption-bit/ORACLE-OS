@@ -1,6 +1,7 @@
 /**
- * ORACLE-OS Models API
+ * ORACLE-OS Models API — Quadripartite Architecture
  * Endpoint que o frontend chama para listar e trocar modelos em runtime
+ * Supports 4 agents: analyst, reviewer, executor, synthesis
  */
 
 import { Router, Request, Response } from 'express';
@@ -15,6 +16,9 @@ import { config } from '../config';
 
 const router = Router();
 
+type QuadripartiteAgent = 'analyst' | 'reviewer' | 'executor' | 'synthesis';
+const VALID_AGENTS: QuadripartiteAgent[] = ['analyst', 'reviewer', 'executor', 'synthesis'];
+
 /**
  * GET /api/models
  * Lista todos os modelos disponíveis (para popular o seletor no frontend)
@@ -28,7 +32,6 @@ router.get('/', (_req: Request, res: Response) => {
     contextWindow: m.contextWindow,
     costPer1kTokens: m.costPer1kTokens,
     strengths: m.strengths,
-    // Indica se a API key está configurada
     available: isProviderConfigured(m.provider),
   }));
 
@@ -45,20 +48,23 @@ router.get('/free', (_req: Request, res: Response) => {
 
 /**
  * GET /api/models/current
- * Retorna os modelos atualmente configurados por agente
+ * Retorna os modelos atualmente configurados por agente (Quadripartite)
  */
 router.get('/current', (_req: Request, res: Response) => {
   res.json({
-    planner: getModelById(config.agents.planner.modelId),
-    executor: getModelById(config.agents.executor.modelId),
-    reviewer: getModelById(config.agents.reviewer.modelId),
+    analyst:   getModelById(config.agents.analyst.modelId),
+    reviewer:  getModelById(config.agents.reviewer.modelId),
+    executor:  getModelById(config.agents.executor.modelId),
+    synthesis: getModelById(config.agents.synthesis.modelId),
+    // Legacy alias
+    planner:   getModelById(config.agents.analyst.modelId),
   });
 });
 
 /**
  * POST /api/models/switch
  * Troca o modelo em runtime (chamado pelo seletor do frontend)
- * Body: { agent: 'planner' | 'executor' | 'reviewer' | 'all', modelId: string }
+ * Body: { agent: 'analyst' | 'reviewer' | 'executor' | 'synthesis' | 'all', modelId: string }
  */
 router.post('/switch', (req: Request, res: Response) => {
   const { agent, modelId } = req.body;
@@ -80,13 +86,23 @@ router.post('/switch', (req: Request, res: Response) => {
 
   // Atualiza em runtime
   if (agent === 'all') {
-    config.agents.planner.modelId = modelId;
-    config.agents.executor.modelId = modelId;
+    config.agents.analyst.modelId = modelId;
     config.agents.reviewer.modelId = modelId;
-  } else if (['planner', 'executor', 'reviewer'].includes(agent)) {
-    config.agents[agent as 'planner' | 'executor' | 'reviewer'].modelId = modelId;
+    config.agents.executor.modelId = modelId;
+    config.agents.synthesis.modelId = modelId;
+    config.agents.planner.modelId = modelId; // legacy
+  } else if (VALID_AGENTS.includes(agent as QuadripartiteAgent)) {
+    config.agents[agent as QuadripartiteAgent].modelId = modelId;
+    // Keep legacy planner in sync with analyst
+    if (agent === 'analyst') {
+      config.agents.planner.modelId = modelId;
+    }
+  } else if (agent === 'planner') {
+    // Legacy support: 'planner' maps to 'analyst'
+    config.agents.analyst.modelId = modelId;
+    config.agents.planner.modelId = modelId;
   } else {
-    return res.status(400).json({ error: `Invalid agent: ${agent}` });
+    return res.status(400).json({ error: `Invalid agent: ${agent}. Valid: ${VALID_AGENTS.join(', ')}` });
   }
 
   console.log(`[Models] Switched ${agent} → ${model.label}`);
@@ -94,7 +110,12 @@ router.post('/switch', (req: Request, res: Response) => {
   res.json({
     success: true,
     message: `${agent} now using ${model.label}`,
-    current: config.agents,
+    current: {
+      analyst:   config.agents.analyst,
+      reviewer:  config.agents.reviewer,
+      executor:  config.agents.executor,
+      synthesis: config.agents.synthesis,
+    },
   });
 });
 

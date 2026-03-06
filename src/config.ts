@@ -1,7 +1,7 @@
 /**
- * ORACLE-OS Configuration
- * Central config for agents, tools, and runtime
- * Suporta múltiplos providers: Anthropic, Groq, Gemini
+ * ORACLE-OS Configuration — Quadripartite Architecture
+ * Central config for the 4-stage pipeline: Analyst → Reviewer → Executor → Synthesis
+ * Supports multiple providers: Anthropic, Groq, Gemini
  */
 
 import { DEFAULT_MODELS } from './models/model-registry.js';
@@ -13,9 +13,12 @@ export interface AgentModelConfig {
 
 export interface OracleConfig {
   agents: {
-    planner: AgentModelConfig;
-    executor: AgentModelConfig;
+    analyst: AgentModelConfig;
     reviewer: AgentModelConfig;
+    executor: AgentModelConfig;
+    synthesis: AgentModelConfig;
+    /** @deprecated Mantido para retrocompatibilidade — use 'analyst' */
+    planner: AgentModelConfig;
   };
   tools: {
     mcp: { enabled: boolean; servers: string[] };
@@ -31,33 +34,42 @@ export interface OracleConfig {
     logLevel: string;
   };
   ui: {
-    allowModelSwitching: boolean; // habilita seletor no frontend
-    defaultUserModel: string;     // modelo padrão na UI
+    allowModelSwitching: boolean;
+    defaultUserModel: string;
+  };
+  /** Guardrails do pipeline quadripartite */
+  pipeline: {
+    /** Máximo de iterações Reviewer↔Analyst antes de forçar aprovação */
+    maxReviewerAnalystIterations: number;
+    /** Máximo de iterações Executor↔Reviewer antes de forçar continuação */
+    maxExecutorRetries: number;
+    /** Máximo de subtasks por blueprint */
+    maxSubtasksPerBlueprint: number;
   };
 }
 
 export const MODEL_COSTS = {
-  'claude-3-5-sonnet': { input: 0.003, output: 0.015 },  // por 1K tokens
+  'claude-3-5-sonnet': { input: 0.003, output: 0.015 },
   'claude-3-haiku':    { input: 0.00025, output: 0.00125 },
   'llama-3.3-70b':     { input: 0.00059, output: 0.00079 },
   'gemini-1.5-flash':  { input: 0.000075, output: 0.0003 },
 };
 
 export const ROUTING_STRATEGY = {
-  'low':    'llama-3.3-70b',   // tasks simples → modelo barato
-  'medium': 'claude-3-haiku',  // tasks médias → equilibrado
-  'high':   'claude-3-5-sonnet' // tasks complexas → melhor modelo
+  'low':    'llama-3.3-70b',
+  'medium': 'claude-3-haiku',
+  'high':   'claude-3-5-sonnet',
 };
 
 export const config: OracleConfig = {
   agents: {
-    // Estratégia híbrida: usa o melhor modelo disponível por papel
-    // Planner: raciocínio complexo → Claude (pago) ou Llama (grátis)
-    planner: { modelId: DEFAULT_MODELS.planner, temperature: 0.7 },
-    // Executor: velocidade e volume → Groq (grátis)
-    executor: { modelId: DEFAULT_MODELS.executor, temperature: 0.2 },
-    // Reviewer: validação → Gemini Flash (grátis)
-    reviewer: { modelId: DEFAULT_MODELS.reviewer, temperature: 0.3 },
+    // Quadripartite pipeline agents
+    analyst:   { modelId: DEFAULT_MODELS.planner,  temperature: 0.5 },
+    reviewer:  { modelId: DEFAULT_MODELS.reviewer,  temperature: 0.3 },
+    executor:  { modelId: DEFAULT_MODELS.executor,  temperature: 0.2 },
+    synthesis: { modelId: DEFAULT_MODELS.reviewer,  temperature: 0.4 },
+    // Legacy alias
+    planner:   { modelId: DEFAULT_MODELS.planner,  temperature: 0.7 },
   },
   tools: {
     mcp: { enabled: true, servers: ['github', 'filesystem', 'browser'] },
@@ -74,6 +86,11 @@ export const config: OracleConfig = {
   },
   ui: {
     allowModelSwitching: true,
-    defaultUserModel: 'llama-3.3-70b', // grátis como padrão
+    defaultUserModel: 'llama-3.3-70b',
+  },
+  pipeline: {
+    maxReviewerAnalystIterations: 3,
+    maxExecutorRetries: 3,
+    maxSubtasksPerBlueprint: 8,
   },
 };
