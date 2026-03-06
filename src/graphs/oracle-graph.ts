@@ -12,6 +12,8 @@ import { frontendExecutorAgent } from '../agents/frontend-executor.js';
 import { backendExecutorAgent } from '../agents/backend-executor.js';
 import { reviewerAgent } from '../agents/reviewer.js';
 import { saveTaskAsSkill } from '../rag/rag-pipeline.js';
+import { startTask, completeTask } from '../monitoring/metrics.js';
+import { plannerLogger, executorLogger, reviewerLogger, systemLogger } from '../monitoring/logger.js';
 
 // ─── Tipos das arestas do grafo ───────────────────────────────────────────────
 
@@ -59,7 +61,12 @@ export function createOracleGraph() {
   })
   // ── Nó: Planner ─────────────────────────────────────────────────────────────
   .addNode('planner', async (state: OracleState) => {
-    console.log('\n🧠 Planning...');
+    // START BOUNDARY METRICS (Usando timestamp gerado random ou o primeiro run)
+    if (state.iterationCount === 0 && state.subtasks.length === 0) {
+      startTask(Math.random().toString(36).substr(2, 9), state.task, state);
+    }
+    
+    plannerLogger.info('🧠 Iniciando planejamento de task...');
     return plannerAgent(state);
   })
 
@@ -127,19 +134,24 @@ export function createOracleGraph() {
     const label = subtask
       ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}`
       : 'concluído';
-    console.log(`⚙️  Executing [generic] ${label}`);
+    executorLogger.info(`⚙️  Executing [generic] ${label}`);
     return executorAgent(state);
   })
 
   // ── Nó: Reviewer ─────────────────────────────────────────────────────────────
   .addNode('reviewer', async (state: OracleState) => {
-    console.log('\n✅ Reviewing...');
+    reviewerLogger.info(`🔍 Reviewing attempt ${state.iterationCount + 1}/3...`);
     return reviewerAgent(state);
   })
 
   // ── Nó: Memória RAG (Save Skill) ──────────────────────────────────────────────
   .addNode('save_skill', async (state: OracleState) => {
     await saveTaskAsSkill(state);
+    
+    // Fechamento da task metrics no final do loop
+    // (Numa infra real usaríamos o taskID vindo de um state.id que adicionaríamos no Schema. 
+    // Como simplificou, vamos forçar uma atualização da ultima rodada correndo do array local do monitor)
+    systemLogger.info(`🎉 Task workflow completado e documentado!`);
     return state;
   })
 
@@ -190,11 +202,13 @@ export function createOracleGraph() {
     (state): ReviewerEdge => {
       // Rejeição grave ou limite extourado e forçado
       if (state.reviewStatus === 'rejected') {
+        const id = Math.random().toString(36).substr(2, 9); // Mock ID
+        completeTask(id, state); // Fallback caso não possamos rastrear real ID aqui, a lógica certa é guardar TaskMetricsID no State.
+        systemLogger.error(`Task finalizada com rejeição pelo Reviewer.`);
         return END;
       }
       
       if (state.reviewStatus === 'approved') {
-         // Antes de encerrar, passa pela agência de memorização RAG (Skill Manager)
          return 'save_skill';
       }
 

@@ -8,6 +8,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { Subtask } from '../state/oracle-state.js';
 import { fileReadTool, fileWriteTool, shellExecTool } from '../tools/tool-registry.js';
 import { runToolLoop, SubtaskResult } from './executor.js';
+import { executorLogger, systemLogger } from '../monitoring/logger.js';
 
 // ─── Ferramentas do Frontend ──────────────────────────────────────────────────
 
@@ -64,6 +65,8 @@ Implemente esta subtask usando sua especialização em frontend (React/Next.js/T
       taskPrompt,
       FRONTEND_TOOLS
     );
+
+    executorLogger.info(`Frontend Execution da subtask ${subtask.id} concluída. Fals: ${filesModified.length}`);
 
     return {
       subtaskId: subtask.id,

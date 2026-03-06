@@ -13,6 +13,7 @@ import {
   githubCreateFileTool,
 } from '../tools/tool-registry.js';
 import { runToolLoop, SubtaskResult } from './executor.js';
+import { executorLogger } from '../monitoring/logger.js';
 
 // ─── Ferramentas do Backend ───────────────────────────────────────────────────
 
@@ -72,6 +73,8 @@ Implemente esta subtask usando sua especialização em backend (Node.js/Python/A
       taskPrompt,
       BACKEND_TOOLS
     );
+
+    executorLogger.info(`Backend Execution da subtask ${subtask.id} concluída. Fals: ${filesModified.length}`);
 
     return {
       subtaskId: subtask.id,

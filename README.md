@@ -49,7 +49,19 @@ cp .env.example .env
 # Edit .env with your API keys
 
 # 5. Start development
-npm run dev
+npm run dev -- "Sua instrução aqui"
+```
+
+## 📊 Monitoring & Health (Sprint 6)
+
+O ORACLE-OS vem com um painel CLI ASCII built-in para rastreamento local das tarefas sendo consolidadas. Abra em outro terminal:
+```bash
+npm run dashboard
+```
+
+Verifique rapidamente se suas APIs de LangChain, Nodes Locais ChromaDB e pastinhas de vetorização (RAG Pipeline) estão saudáveis:
+```bash
+npm run health
 ```
 
 ---
