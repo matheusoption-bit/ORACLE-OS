@@ -1,235 +1,58 @@
-# Fluxo End-to-End — ORACLE-OS Sprint 4
+# Fluxo End-to-End ORACLE-OS (Sprint 4)
+Aqui detalhamos como ocorre uma iteração completa no ORACLE-OS, desde o recebimento do input do usuário até a aprovação final.
 
-> Exemplo completo do fluxo `START → Planner → Executor → Reviewer → END`
-
----
-
-## Task: `"Create a Button component in React"`
-
-### 1. Inicialização (START)
-
-```
-╔══════════════════════════════════════╗
-║         ORACLE-OS  v0.1.0            ║
-╚══════════════════════════════════════╝
-🧠 Planner  : claude-3-7-sonnet
-⚙️  Executor : llama-3.3-70b
-✅ Reviewer : gemini-2.0-flash
-
-🚀 Task recebida: "Create a Button component in React"
+## 1. Input do Usuário
+O usuário executa o comando via CLI para inciar a tarefa. 
+```bash
+npm run dev -- "Create a Button component in React"
 ```
 
----
+O arquivo `src/index.ts` inicializa o ambiente, instancia o `OracleState` e invoca o `OracleGraph`.
 
-### 2. Planner (Decomposição)
-
-O Planner decompõe a task em subtasks atômicas:
-
+## 2. Planning (Planner Agent)
+O nó Planner recebe o seguinte estado:
 ```json
 {
-  "subtasks": [
-    {
-      "id": "FE-001",
-      "title": "Criar componente Button.tsx",
-      "description": "Criar componente React tipado com variantes (primary, secondary, danger) e props size (sm/md/lg)",
-      "type": "code",
-      "priority": 1,
-      "dependsOn": [],
-      "assignedAgent": "frontend",
-      "estimatedDuration": 15,
-      "tools": ["file_write"],
-      "validationCriteria": "Componente renderiza sem erros, aceita props variant e size"
-    },
-    {
-      "id": "FE-002",
-      "title": "Criar stories Storybook para Button",
-      "description": "Documentar as variantes do Button com Storybook CSF3",
-      "type": "file",
-      "priority": 2,
-      "dependsOn": ["FE-001"],
-      "assignedAgent": "frontend",
-      "estimatedDuration": 10,
-      "tools": ["file_write"],
-      "validationCriteria": "Stories renderizam no Storybook sem erro"
-    },
-    {
-      "id": "FE-003",
-      "title": "Escrever testes unitários do Button",
-      "description": "Testes com Vitest + Testing Library cobrindo click, disabled, variantes",
-      "type": "code",
-      "priority": 2,
-      "dependsOn": ["FE-001"],
-      "assignedAgent": "frontend",
-      "estimatedDuration": 15,
-      "tools": ["file_write", "shell_exec"],
-      "validationCriteria": "100% de cobertura dos props, todos os testes passando"
-    }
-  ],
-  "executionPlan": "mixed"
+  "task": "Create a Button component in React",
+  "subtasks": [],
+  "currentSubtask": 0,
+  "results": {},
+  "errors": [],
+  "reviewStatus": "pending",
+  "iterationCount": 0
 }
 ```
 
----
+O `plannerAgent` (`src/agents/planner.ts`) decompõe a solicitação e retorna uma subtask com `type: "react"` e `assignedAgent: "frontend"`.
 
-### 3. Executor Router
+## 3. Roteamento e Execução (Executor Agents)
+Como o projeto está utilizando o Sprint 4, existe o `executor_router` (`src/graphs/oracle-graph.ts`) que analisa o `subtask.type`. Ao identificar a keyword "react", ele roteia a tarefa diretamente para o **Frontend Executor** (`frontend_executor`). 
 
-O grafo roteia com base em `assignedAgent`:
+O LLM do Executor é invocado contendo apenas suas especialidades via system prompt (foco total em UI, Componentes TSX e Tailwind), bem como as ferramentas de manipulação de arquivo e shell vinculadas. Ele cria o arquivo em `src/components/Button.tsx`. O loop do LangGraph avança a `currentSubtask`. Ao finalizarem todas as subtasks, a transição encaminha o fluxo para o **Reviewer**.
 
-```
-planner → (FE-001: frontend) → frontend_executor
-```
+## 4. Revisão e Refinamento (Reviewer Agent)
+O **Reviewer Agent** (`src/agents/reviewer.ts`) atua como auditor de QA.
 
-O `frontendExecutorAgent` executa o tool-calling loop:
+### Cenário A: Falha ou Código Incompleto
+O Reviewer verifica que faltou tratamento de erro ou validação visual do componente, e sinaliza uma recusa:
+- `reviewStatus = 'needs_revision'`
+- `revisionNotes = 'Faltou tratar os paddings corretamente para o Button.tsx e adicionar prop Types.'`
 
-```
-🧠 MODEL: "Vou criar Button.tsx com variantes e TypeScript..."
-→ file_write: src/components/Button.tsx
-```
+O grafo verifica `reviewStatus`, o `iterationCount` vai para `1`, e o processo retorna resetando `currentSubtask = 0`. O Router encaminha para o Frontend Executor, informando a nota de revisão no Prompt para corrigir os problemas apontados.
 
-**Arquivo criado (`src/components/Button.tsx`):**
-```tsx
-import React from 'react';
+### Cenário B: Aprovação Automática Limite (iterationCount >= 3)
+Caso o revisor insista após 3 tentativas na falha da API ou código que não funciona:
+O Reviewer Agent detecta `iterationCount` batendo o limite configurado (3).
+- `reviewStatus` é forçado como `'approved'` e a execução encerra gerando um warning de intervenção manual no `revisionNotes`.
 
-type ButtonVariant = 'primary' | 'secondary' | 'danger';
-type ButtonSize   = 'sm' | 'md' | 'lg';
+### Cenário C: Aprovação Primária ou Sucesso após Ajustes
+A implementação atende aos critérios do `reviewer-prompt.md`:
+- Todos os subtasks deram sucessos.
+- Sem *secrets*.
+- Código tipado corretamente.
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  children: React.ReactNode;
-}
+- `reviewStatus = 'approved'`
+- Fim da Execução.
 
-export function Button({
-  variant = 'primary',
-  size = 'md',
-  children,
-  className = '',
-  ...props
-}: ButtonProps) {
-  const base = 'inline-flex items-center rounded font-medium transition-colors';
-  const variants: Record<ButtonVariant, string> = {
-    primary:   'bg-blue-600 text-white hover:bg-blue-700',
-    secondary: 'bg-gray-200 text-gray-800 hover:bg-gray-300',
-    danger:    'bg-red-600 text-white hover:bg-red-700',
-  };
-  const sizes: Record<ButtonSize, string> = {
-    sm: 'px-3 py-1 text-sm',
-    md: 'px-4 py-2 text-base',
-    lg: 'px-6 py-3 text-lg',
-  };
-
-  return (
-    <button
-      className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
-      {...props}
-    >
-      {children}
-    </button>
-  );
-}
-
-export default Button;
-```
-
----
-
-### 4. Loop de Subtasks
-
-```
-⚙️  Executing [frontend] 1/3 — Criar componente Button.tsx     → ✅ success
-⚙️  Executing [frontend] 2/3 — Criar stories Storybook         → ✅ success
-⚙️  Executing [frontend] 3/3 — Escrever testes unitários       → ✅ success
-```
-
-Quando `currentSubtask >= subtasks.length` → vai para `reviewer`.
-
----
-
-### 5. Reviewer (Validação)
-
-```
-✅ Reviewing... (tentativa 1/3)
-```
-
-O Reviewer analisa `state.results` e decide:
-
-```json
-{
-  "status": "approved",
-  "issues": [],
-  "summary": "Button.tsx criado com TypeScript correto, variantes implementadas, testes passando. Stories documentadas."
-}
-```
-
----
-
-### 6. Resultado Final (END)
-
-```
-══════════════════════════════════════════
-✅ STATUS FINAL: APPROVED
-══════════════════════════════════════════
-
-📋 Subtasks executadas: 3
-  ✅ [FE-001] Criar componente Button.tsx
-  ✅ [FE-002] Criar stories Storybook para Button
-  ✅ [FE-003] Escrever testes unitários do Button
-
-🔁 Iterações: 1
-══════════════════════════════════════════
-```
-
----
-
-## Cenário com `needs_revision`
-
-Se na primeira revisão o Reviewer encontrar um problema:
-
-```json
-{
-  "status": "needs_revision",
-  "revisionNotes": "Em Button.tsx: export default está faltando. Adicionar na última linha.",
-  "summary": "Implementação quase completa, 1 problema menor."
-}
-```
-
-O grafo volta ao `frontend_executor` com `currentSubtask = 0` e `revisionNotes` disponível no estado.
-O Executor lê `state.revisionNotes` no próximo ciclo e corrige o problema.
-
----
-
-## Diagrama do Fluxo
-
-```
-START
-  │
-  ▼
-┌─────────┐   sem subtasks   END
-│ Planner │─────────────────▶
-└────┬────┘
-     │ roteia por assignedAgent
-     ▼
-┌────────────────────┐
-│  executor_router   │
-│  frontend / backend│
-│  / genérico        │
-└────────┬───────────┘
-         │ subtask por subtask
-         ▼
-┌──────────────┐   currentSubtask < length
-│   Executor   │◀──────────────────────────┐
-└──────┬───────┘                           │
-       │ currentSubtask >= length          │
-       ▼                                   │
-┌──────────────┐  needs_revision + iter<3  │
-│   Reviewer   │───────────────────────────┘
-└──────┬───────┘
-       │ approved / rejected / iter>=3
-       ▼
-      END
-```
-
----
-
-*Gerado pelo ORACLE-OS — Sprint 4*
-*Data: 2026-03-05*
+## 5. Status Final (Terminal Output)
+A conclusão é recebida por `src/index.ts` (ou a função chamadora), e um resumo consolidado de sucesso e possíveis notas é impresso em terminal para o operador.

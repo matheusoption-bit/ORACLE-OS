@@ -137,32 +137,20 @@ Ferramentas MCP disponíveis: ${subtask.tools.join(', ')}
 
 Execute esta subtask passo a passo usando as ferramentas disponíveis.`;
 
-  try {
-    const { output, toolCallsExecuted, filesModified } = await runToolLoop(
-      systemPrompt,
-      taskPrompt,
-      tools
-    );
+  const { output, toolCallsExecuted, filesModified } = await runToolLoop(
+    systemPrompt,
+    taskPrompt,
+    tools
+  );
 
-    return {
-      subtaskId: subtask.id,
-      status: 'success',
-      output,
-      toolCallsExecuted,
-      filesModified,
-      timestamp: new Date().toISOString(),
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      subtaskId: subtask.id,
-      status: 'failed',
-      output: '',
-      toolCallsExecuted: [],
-      filesModified: [],
-      timestamp: new Date().toISOString(),
-    };
-  }
+  return {
+    subtaskId: subtask.id,
+    status: 'success',
+    output,
+    toolCallsExecuted,
+    filesModified,
+    timestamp: new Date().toISOString(),
+  };
 }
 
 // ─── Função principal — nó LangGraph ─────────────────────────────────────────
@@ -199,13 +187,13 @@ export async function executorAgent(
         [subtask.id]: {
           subtaskId: subtask.id,
           status: 'failed',
-          output: '',
+          output: error.message,
           toolCallsExecuted: [],
           filesModified: [],
           timestamp: new Date().toISOString(),
         } satisfies SubtaskResult,
       },
-      errors: [...state.errors, error],
+      errors: [...(state.errors ?? []), error],
       currentSubtask: state.currentSubtask + 1, // avança mesmo com erro
     };
   }

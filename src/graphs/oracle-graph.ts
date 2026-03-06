@@ -18,23 +18,27 @@ type PlannerEdge = 'frontend_executor' | 'backend_executor' | 'executor' | typeo
 type ExecutorEdge = 'reviewer' | 'frontend_executor' | 'backend_executor' | 'executor';
 type ReviewerEdge = 'frontend_executor' | 'backend_executor' | 'executor' | typeof END;
 
-// ─── Função de roteamento por assignedAgent ───────────────────────────────────
+// ─── Função de roteamento por conteúdo ────────────────────────────────────────
 
-function routeByAgent(state: OracleState): 'frontend_executor' | 'backend_executor' | 'executor' {
+function executor_router(state: OracleState): 'frontend_executor' | 'backend_executor' | 'executor' {
   const subtask = state.subtasks[state.currentSubtask];
-  if (!subtask) return 'executor';
+  if (!subtask) return 'executor'; // Fallback seguro se não houver task atual
 
-  switch (subtask.assignedAgent) {
-    case 'frontend':
-      return 'frontend_executor';
-    case 'backend':
-    case 'devops':
-    case 'data':
-    case 'security':
-      return 'backend_executor';
-    default:
-      return 'executor';
+  const typeLower = (subtask.type || '').toLowerCase();
+  
+  if (typeLower.includes('react') || typeLower.includes('next') || typeLower.includes('component')) {
+    return 'frontend_executor';
   }
+  
+  if (typeLower.includes('api') || typeLower.includes('node') || typeLower.includes('python')) {
+    return 'backend_executor';
+  }
+
+  // Fallback baseado no assignAgent original caso não bata a keyword (mantendo certa retrocompatibilidade)
+  if (subtask.assignedAgent === 'frontend') return 'frontend_executor';
+  if (subtask.assignedAgent === 'backend') return 'backend_executor';
+
+  return 'executor';
 }
 
 // ─── Criação do grafo ─────────────────────────────────────────────────────────
@@ -51,16 +55,15 @@ export function createOracleGraph() {
       revisionNotes: null,
       iterationCount: null,
     },
-  });
-
+  })
   // ── Nó: Planner ─────────────────────────────────────────────────────────────
-  workflow.addNode('planner', async (state: OracleState) => {
+  .addNode('planner', async (state: OracleState) => {
     console.log('\n🧠 Planning...');
     return plannerAgent(state);
-  });
+  })
 
   // ── Nó: Frontend Executor ────────────────────────────────────────────────────
-  workflow.addNode('frontend_executor', async (state: OracleState) => {
+  .addNode('frontend_executor', async (state: OracleState) => {
     const subtask = state.subtasks[state.currentSubtask];
     const label = subtask
       ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}`
@@ -82,14 +85,14 @@ export function createOracleGraph() {
           ...state.results,
           [subtask.id]: { subtaskId: subtask.id, status: 'failed', output: error.message, toolCallsExecuted: [], filesModified: [], timestamp: new Date().toISOString() },
         },
-        errors: [...state.errors, error],
+        errors: [...(state.errors ?? []), error],
         currentSubtask: state.currentSubtask + 1,
       };
     }
-  });
+  })
 
   // ── Nó: Backend Executor ─────────────────────────────────────────────────────
-  workflow.addNode('backend_executor', async (state: OracleState) => {
+  .addNode('backend_executor', async (state: OracleState) => {
     const subtask = state.subtasks[state.currentSubtask];
     const label = subtask
       ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}`
@@ -111,78 +114,82 @@ export function createOracleGraph() {
           ...state.results,
           [subtask.id]: { subtaskId: subtask.id, status: 'failed', output: error.message, toolCallsExecuted: [], filesModified: [], timestamp: new Date().toISOString() },
         },
-        errors: [...state.errors, error],
+        errors: [...(state.errors ?? []), error],
         currentSubtask: state.currentSubtask + 1,
       };
     }
-  });
+  })
 
   // ── Nó: Executor Genérico ────────────────────────────────────────────────────
-  workflow.addNode('executor', async (state: OracleState) => {
+  .addNode('executor', async (state: OracleState) => {
     const subtask = state.subtasks[state.currentSubtask];
     const label = subtask
       ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}`
       : 'concluído';
     console.log(`⚙️  Executing [generic] ${label}`);
     return executorAgent(state);
-  });
+  })
 
   // ── Nó: Reviewer ─────────────────────────────────────────────────────────────
-  workflow.addNode('reviewer', async (state: OracleState) => {
+  .addNode('reviewer', async (state: OracleState) => {
     console.log('\n✅ Reviewing...');
     return reviewerAgent(state);
-  });
+  })
 
   // ── Arestas ───────────────────────────────────────────────────────────────────
 
   // START → planner
-  workflow.addEdge(START, 'planner');
+  .addEdge(START, 'planner')
 
   // planner → executor_router (ou END se sem subtasks)
-  workflow.addConditionalEdges(
+  .addConditionalEdges(
     'planner',
     (state): PlannerEdge => {
       if (state.subtasks.length === 0) return END;
-      return routeByAgent(state);
+      return executor_router(state);
     }
-  );
+  )
 
   // frontend_executor → próximo subtask ou reviewer
-  workflow.addConditionalEdges(
+  .addConditionalEdges(
     'frontend_executor',
     (state): ExecutorEdge => {
       if (state.currentSubtask >= state.subtasks.length) return 'reviewer';
-      return routeByAgent(state);
+      return executor_router(state);
     }
-  );
+  )
 
   // backend_executor → próximo subtask ou reviewer
-  workflow.addConditionalEdges(
+  .addConditionalEdges(
     'backend_executor',
     (state): ExecutorEdge => {
       if (state.currentSubtask >= state.subtasks.length) return 'reviewer';
-      return routeByAgent(state);
+      return executor_router(state);
     }
-  );
+  )
 
   // executor genérico → próximo subtask ou reviewer
-  workflow.addConditionalEdges(
+  .addConditionalEdges(
     'executor',
     (state): ExecutorEdge => {
       if (state.currentSubtask >= state.subtasks.length) return 'reviewer';
-      return routeByAgent(state);
+      return executor_router(state);
     }
-  );
+  )
 
   // reviewer → END (aprovado/rejeitado/max iter) ou re-execução
-  workflow.addConditionalEdges(
+  .addConditionalEdges(
     'reviewer',
     (state): ReviewerEdge => {
-      if (state.reviewStatus === 'approved' || state.reviewStatus === 'rejected' || state.iterationCount >= 3) {
+      if (state.reviewStatus === 'approved' || state.reviewStatus === 'rejected') {
         return END;
       }
-      // needs_revision: reset currentSubtask e volta ao executor correto
-      return routeByAgent({ ...state, currentSubtask: 0 });
+      if (state.iterationCount >= 3) {
+        return END;
+      }
+      
+      // needs_revision: volta para a primeira subtask re-roteando tudo
+      return executor_router({ ...state, currentSubtask: 0 });
     }
   );
 

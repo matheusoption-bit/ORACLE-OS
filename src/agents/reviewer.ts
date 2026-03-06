@@ -1,9 +1,3 @@
-/**
- * ORACLE-OS Reviewer Agent — Sprint 4
- * Valida resultados dos executors, suporta needs_revision e force-approve
- * Função LangGraph nativa com output estruturado Zod
- */
-
 import { z } from 'zod';
 import { HumanMessage } from '@langchain/core/messages';
 import { createModel } from '../models/model-registry.js';
@@ -15,21 +9,12 @@ import { dirname, resolve } from 'path';
 
 // ─── Schemas Zod ──────────────────────────────────────────────────────────────
 
-const IssueSchema = z.object({
-  severity: z.enum(['critical', 'major', 'minor']),
-  description: z.string(),
-  suggestedFix: z.string(),
-});
-
 const ReviewSchema = z.object({
-  status: z.enum(['approved', 'rejected', 'needs_revision']),
-  issues: z.array(IssueSchema).default([]),
+  reviewStatus: z.enum(['approved', 'rejected', 'needs_revision']),
   revisionNotes: z.string().optional(),
-  summary: z.string(),
 });
 
 export type Review = z.infer<typeof ReviewSchema>;
-export type ReviewIssue = z.infer<typeof IssueSchema>;
 
 // ─── Carrega prompt template ──────────────────────────────────────────────────
 
@@ -37,7 +22,8 @@ function loadReviewerPrompt(): string {
   try {
     const __filename = fileURLToPath(import.meta.url);
     const __dir = dirname(__filename);
-    return readFileSync(resolve(__dir, '../../prompts/agents/reviewer-prompt.md'), 'utf-8');
+    const promptPath = resolve(__dir, '../../prompts/agents/reviewer-prompt.md');
+    return readFileSync(promptPath, 'utf-8');
   } catch {
     return `Você é o ORACLE Reviewer. Avalie os resultados dos Executors e decida:
 - approved: tudo concluído e funcional
@@ -48,30 +34,23 @@ function loadReviewerPrompt(): string {
 
 // ─── Força aprovação após max tentativas ──────────────────────────────────────
 
-function buildForceApproveResult(): Partial<OracleState> {
-  console.warn('⚠️  Reviewer: Máximo de tentativas atingido — forçando aprovação com warnings.');
+function buildForceApproveResult(state: OracleState): Partial<OracleState> {
+  console.warn('⚠️  Reviewer: Máximo de tentativas atingido (3) — forçando aprovação com warnings.');
   return {
     reviewStatus: 'approved',
-    revisionNotes: '[AUTO-APROVADO] Máximo de 3 iterações atingido. Revisar manualmente.',
-    iterationCount: 3,
+    revisionNotes: '[AUTO-APROVADO] Limite de 3 iterações atingido. O loop foi encerrado forçadamente.',
+    iterationCount: state.iterationCount + 1,
   };
 }
 
 // ─── Função principal — nó LangGraph ─────────────────────────────────────────
 
-/**
- * reviewerAgent — nó LangGraph
- * Analisa state.results e state.errors, retorna atualização do estado com reviewStatus.
- */
 export async function reviewerAgent(
   state: OracleState
 ): Promise<Partial<OracleState>> {
   console.log(`🔍 Reviewer: Avaliando resultados (tentativa ${state.iterationCount + 1}/3)...`);
 
-  // Force-approve após 3 tentativas — sem chamar o LLM
-  if (state.iterationCount >= 3) {
-    return buildForceApproveResult();
-  }
+  const nextIteration = state.iterationCount + 1;
 
   const model = createModel({
     modelId: config.agents.reviewer.modelId,
@@ -81,13 +60,11 @@ export async function reviewerAgent(
   const structuredModel = model.withStructuredOutput(ReviewSchema);
   const systemPrompt = loadReviewerPrompt();
 
-  // Serializa resultados e erros de forma segura (sem circular refs)
   const resultsJson = JSON.stringify(state.results, null, 2);
   const errorsJson = state.errors.length > 0
     ? JSON.stringify(state.errors.map((e) => ({ message: e.message, name: e.name })), null, 2)
     : '[]';
 
-  // Sumário dos subtasks para contexto
   const subtasksSummary = state.subtasks
     .map((s) => `- [${s.id}] ${s.title} (${s.type}, prioridade ${s.priority})`)
     .join('\n');
@@ -111,23 +88,39 @@ ${errorsJson}
 </erros_capturados>
 
 <contexto_iteracao>
-Tentativa: ${state.iterationCount + 1} de 3
+Tentativa: ${nextIteration} de 3
 ${state.revisionNotes ? `Notas da revisão anterior: ${state.revisionNotes}` : ''}
 </contexto_iteracao>
 
-Avalie o trabalho produzido e retorne sua decisão estruturada.`;
+Avalie o trabalho produzido e retorne sua decisão estruturada considerando as diretrizes e critérios.`;
 
-  const review = await structuredModel.invoke([new HumanMessage(userPrompt)]);
+  try {
+    const review = await structuredModel.invoke([new HumanMessage(userPrompt)]);
+    let finalStatus = review.reviewStatus;
+    let finalNotes = review.revisionNotes;
 
-  // Extrai erros críticos para state.errors (mantém compatibilidade)
-  const criticalErrors = review.issues
-    .filter((i) => i.severity === 'critical')
-    .map((i) => new Error(`[CRÍTICO] ${i.description} → Correção: ${i.suggestedFix}`));
+    // Se a decisão for de rejeição ou revisão, verifica se atingimos limite de segurança
+    if ((finalStatus === 'rejected' || finalStatus === 'needs_revision') && nextIteration >= 3) {
+      console.warn('⚠️  Reviewer: Limite máximo configurado atingido. Forçando aprovação com aviso.');
+      finalStatus = 'approved';
+      finalNotes = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED]\nTentativas se esgotaram.\nÚltimo feedback: ${finalNotes || 'Nenhum'}`;
+    }
 
-  return {
-    reviewStatus: review.status,
-    revisionNotes: review.revisionNotes,
-    errors: criticalErrors.length > 0 ? criticalErrors : state.errors,
-    iterationCount: state.iterationCount + 1,
-  };
+    return {
+      reviewStatus: finalStatus,
+      revisionNotes: finalNotes,
+      iterationCount: nextIteration,
+    };
+  } catch (err) {
+    console.error('❌ Erro no Reviewer Agent:', err);
+    if (nextIteration >= 3) {
+      return buildForceApproveResult(state);
+    }
+    return {
+      reviewStatus: 'needs_revision',
+      revisionNotes: 'Falha interna ao analisar resposta do modelo no Revisor.',
+      iterationCount: nextIteration,
+      errors: [...state.errors, err instanceof Error ? err : new Error(String(err))]
+    };
+  }
 }

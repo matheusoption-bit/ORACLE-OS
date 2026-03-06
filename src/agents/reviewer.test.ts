@@ -1,139 +1,86 @@
-/**
- * ORACLE-OS Reviewer Agent — Testes Unitários (Sprint 4)
- * Mock do LLM para não consumir API real
- */
+import { expect, test, vi, describe, beforeEach } from 'vitest';
+import { reviewerAgent } from './reviewer.js';
+import { createInitialState } from '../state/oracle-state.js';
+import * as registry from '../models/model-registry.js';
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OracleState } from '../state/oracle-state.js';
-
-// ─── Mocks ────────────────────────────────────────────────────────────────────
-
-vi.mock('../models/model-registry.js', () => ({
-  createModel: vi.fn(),
-}));
-
-vi.mock('../config.js', () => ({
-  config: {
-    agents: {
-      reviewer: { modelId: 'gemini-2.0-flash', temperature: 0.3 },
-    },
-  },
-}));
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function buildState(overrides: Partial<OracleState> = {}): OracleState {
+vi.mock('../models/model-registry.js', async () => {
+  const actual = await vi.importActual('../models/model-registry.js');
   return {
-    task: 'Create a Button component',
-    subtasks: [
-      {
-        id: 'FE-001',
-        title: 'Criar Button.tsx',
-        description: 'Criar componente React Button',
-        type: 'code',
-        priority: 1,
-        dependsOn: [],
-        assignedAgent: 'frontend',
-        dependencies: [],
-        estimatedDuration: 15,
-        tools: ['file_write'],
-        validationCriteria: 'Componente renderiza sem erros',
-      },
-    ],
-    currentSubtask: 1,
-    results: {
-      'FE-001': { subtaskId: 'FE-001', status: 'success', output: 'Button.tsx criado', toolCallsExecuted: ['file_write'], filesModified: ['src/components/Button.tsx'], timestamp: '2026-03-05T19:00:00Z' },
-    },
-    errors: [],
-    reviewStatus: 'pending',
-    iterationCount: 0,
-    ...overrides,
+    ...actual,
+    createModel: vi.fn(),
   };
-}
+});
 
-function buildMockModel(review: Record<string, unknown>) {
-  return {
-    withStructuredOutput: vi.fn().mockReturnValue({
-      invoke: vi.fn().mockResolvedValue(review),
-    }),
-  };
-}
-
-// ─── Testes ───────────────────────────────────────────────────────────────────
-
-describe('reviewerAgent', () => {
+describe('Reviewer Agent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('aprova resultado válido — retorna reviewStatus: approved', async () => {
-    const { createModel } = await import('../models/model-registry.js');
-    const { reviewerAgent } = await import('./reviewer.js');
+  const mockModelResponse = (mockOutput: any) => {
+    const invokeMock = vi.fn().mockResolvedValue(mockOutput);
+    const withStructuredOutputMock = vi.fn().mockReturnValue({ invoke: invokeMock });
+    vi.mocked(registry.createModel).mockReturnValue({
+      withStructuredOutput: withStructuredOutputMock,
+    } as any);
+  };
 
-    vi.mocked(createModel).mockReturnValue(
-      buildMockModel({ status: 'approved', issues: [], summary: 'Tudo correto.' }) as never
-    );
+  test('Reviewer aprova resultado válido', async () => {
+    mockModelResponse({
+      reviewStatus: 'approved',
+      revisionNotes: '',
+    });
 
-    const state = buildState();
+    const state = createInitialState('Criar componente de teste');
     const result = await reviewerAgent(state);
 
     expect(result.reviewStatus).toBe('approved');
     expect(result.iterationCount).toBe(1);
   });
 
-  it('rejeita resultado com erros — retorna reviewStatus: rejected', async () => {
-    const { createModel } = await import('../models/model-registry.js');
-    const { reviewerAgent } = await import('./reviewer.js');
-
-    vi.mocked(createModel).mockReturnValue(
-      buildMockModel({
-        status: 'rejected',
-        issues: [{ severity: 'critical', description: 'Build quebrado', suggestedFix: 'Corrigir imports' }],
-        summary: 'Falha crítica detectada.',
-      }) as never
-    );
-
-    const state = buildState({
-      results: { 'FE-001': { subtaskId: 'FE-001', status: 'failed', output: '', toolCallsExecuted: [], filesModified: [], timestamp: '2026-03-05T19:00:00Z' } },
-      errors: [new Error('Build error')],
+  test('Reviewer rejeita resultado com erros (needs_revision)', async () => {
+    mockModelResponse({
+      reviewStatus: 'needs_revision',
+      revisionNotes: 'O arquivo x está faltando tratamento de exceção',
     });
 
-    const result = await reviewerAgent(state);
-
-    expect(result.reviewStatus).toBe('rejected');
-    expect(result.iterationCount).toBe(1);
-  });
-
-  it('needs_revision popula revisionNotes com feedback específico', async () => {
-    const { createModel } = await import('../models/model-registry.js');
-    const { reviewerAgent } = await import('./reviewer.js');
-
-    vi.mocked(createModel).mockReturnValue(
-      buildMockModel({
-        status: 'needs_revision',
-        issues: [{ severity: 'major', description: 'Falta export default', suggestedFix: 'Adicionar export default Button' }],
-        revisionNotes: 'Em Button.tsx: adicionar `export default Button` no final do arquivo.',
-        summary: 'Implementação quase completa, falta export.',
-      }) as never
-    );
-
-    const state = buildState();
+    const state = createInitialState('Rotina com falhas');
     const result = await reviewerAgent(state);
 
     expect(result.reviewStatus).toBe('needs_revision');
-    expect(result.revisionNotes).toBe('Em Button.tsx: adicionar `export default Button` no final do arquivo.');
+    expect(result.revisionNotes).toBe('O arquivo x está faltando tratamento de exceção');
+    expect(result.iterationCount).toBe(1); // Incrementa para próxima iteração
   });
 
-  it('força aprovação após iterationCount >= 3 — sem chamar LLM', async () => {
-    const { createModel } = await import('../models/model-registry.js');
-    const { reviewerAgent } = await import('./reviewer.js');
+  test('Reviewer força aprovação após 3 tentativas atigirem o limite', async () => {
+    // Simulamos que o LLM continuou pedindo revisão ou rejeitando
+    mockModelResponse({
+      reviewStatus: 'rejected',
+      revisionNotes: 'Não consertaram o erro ainda!',
+    });
 
-    const state = buildState({ iterationCount: 3 });
+    const state = createInitialState('Tarefa infinita');
+    state.iterationCount = 2; // Significa que a próxima é a 3 (o limite)
+
     const result = await reviewerAgent(state);
 
-    // LLM não deve ter sido chamado
-    expect(vi.mocked(createModel)).not.toHaveBeenCalled();
     expect(result.reviewStatus).toBe('approved');
-    expect(result.revisionNotes).toContain('AUTO-APROVADO');
+    expect(result.revisionNotes).toContain('[FORCED APPROVAL - MAX ITERATIONS EXCEEDED]');
+    expect(result.iterationCount).toBe(3);
+  });
+
+  test('reviewStatus é atualizado corretamente no state em caso de erro da API', async () => {
+    // Simulamos falha na API ou no binding z.object()
+    const invokeMock = vi.fn().mockRejectedValue(new Error('API Model Error'));
+    const withStructuredOutputMock = vi.fn().mockReturnValue({ invoke: invokeMock });
+    vi.mocked(registry.createModel).mockReturnValue({
+      withStructuredOutput: withStructuredOutputMock,
+    } as any);
+
+    const state = createInitialState('Teste de falha na API');
+    const result = await reviewerAgent(state);
+
+    expect(result.reviewStatus).toBe('needs_revision');
+    expect(result.errors?.length).toBeGreaterThan(0);
+    expect(result.iterationCount).toBe(1);
   });
 });
