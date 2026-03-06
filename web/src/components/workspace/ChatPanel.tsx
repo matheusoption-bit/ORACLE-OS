@@ -1,5 +1,13 @@
 'use client';
 
+/**
+ * ChatPanel — Painel de chat do ORACLE-OS (Sprint 10)
+ *
+ * Evolução:
+ * - ChatInput agora suporta intervenção via WebSocket (onSendWs)
+ * - Mensagens do usuário durante execução são enviadas ao agente em tempo real
+ */
+
 import { useEffect, useRef, useCallback } from 'react';
 import { useOracleStore } from '@/stores/oracle.store';
 import { MessageBubble } from './MessageBubble';
@@ -10,9 +18,11 @@ import type { ChatMessage } from '@/types/oracle.types';
 
 interface ChatPanelProps {
   taskId: string;
+  /** Função para enviar mensagem via WebSocket (intervenção) */
+  sendUserMessage?: (content: string) => void;
 }
 
-export function ChatPanel({ taskId: _taskId }: ChatPanelProps) {
+export function ChatPanel({ taskId: _taskId, sendUserMessage }: ChatPanelProps) {
   const { messages, subtasks } = useOracleStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -21,11 +31,19 @@ export function ChatPanel({ taskId: _taskId }: ChatPanelProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Handler para follow-up do ChatInput
+  // Handler para follow-up do ChatInput (quando não está executando)
   const handleSend = useCallback((text: string) => {
-    // Por ora adiciona como mensagem do usuário (integração futura com WS)
+    // Adiciona como mensagem do usuário no store
+    // Em uma versão futura, pode iniciar nova task via API
     useOracleStore.getState().appendMessage({ role: 'user', content: text });
   }, []);
+
+  // Handler para intervenção via WebSocket (quando está executando)
+  const handleSendWs = useCallback((text: string) => {
+    if (sendUserMessage) {
+      sendUserMessage(text);
+    }
+  }, [sendUserMessage]);
 
   return (
     <div
@@ -35,7 +53,7 @@ export function ChatPanel({ taskId: _taskId }: ChatPanelProps) {
         borderRight: '1px solid var(--glass-border)',
       }}
     >
-      {/* ── Área de mensagens (scroll) ── */}
+      {/* Área de mensagens (scroll) */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {/* Mensagens vazias */}
         {messages.length === 0 && (
@@ -72,11 +90,11 @@ export function ChatPanel({ taskId: _taskId }: ChatPanelProps) {
         <div ref={bottomRef} className="h-2" />
       </div>
 
-      {/* ── SubtaskProgress (sticky durante execução) ── */}
+      {/* SubtaskProgress (sticky durante execução) */}
       <SubtaskProgress />
 
-      {/* ── Chat Input (fixo na base) ── */}
-      <ChatInput onSend={handleSend} />
+      {/* Chat Input (fixo na base) — com suporte a intervenção */}
+      <ChatInput onSend={handleSend} onSendWs={handleSendWs} />
     </div>
   );
 }

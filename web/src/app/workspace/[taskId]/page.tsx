@@ -78,7 +78,7 @@ export default function WorkspacePage({
   params: Promise<{ taskId: string }>;
 }) {
   const { taskId } = use(params);
-  const { status, reconnect } = useOracleWebSocket(taskId);
+  const { status, sendUserMessage, reconnect } = useOracleWebSocket(taskId);
 
   // Loading state enquanto conecta (primeira vez)
   if (status === 'connecting') {
@@ -92,7 +92,7 @@ export default function WorkspacePage({
 
   return (
     <div className="h-screen w-full overflow-hidden">
-      <WorkspaceLayout taskId={taskId} />
+      <WorkspaceLayout taskId={taskId} sendUserMessage={sendUserMessage} />
     </div>
   );
 }

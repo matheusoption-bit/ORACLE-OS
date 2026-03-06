@@ -73,9 +73,11 @@ function ElapsedTimer({ startedAt }: { startedAt: string | null }) {
 
 interface WorkspaceLayoutProps {
   taskId: string;
+  /** Função para enviar mensagem do usuário via WebSocket (intervenção) */
+  sendUserMessage?: (content: string) => void;
 }
 
-export default function WorkspaceLayout({ taskId }: WorkspaceLayoutProps) {
+export default function WorkspaceLayout({ taskId, sendUserMessage }: WorkspaceLayoutProps) {
   const router = useRouter();
   const { taskStatus, taskPrompt, taskStartedAt } = useOracleStore();
 
@@ -84,12 +86,12 @@ export default function WorkspaceLayout({ taskId }: WorkspaceLayoutProps) {
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#080808' }}>
-      {/* ── Sidebar (Esquerda) ── */}
+      {/* Sidebar (Esquerda) */}
       <Sidebar />
 
-      {/* ── Conteúdo Principal ── */}
+      {/* Conteúdo Principal */}
       <div className="flex flex-col flex-1 min-w-0">
-        {/* ── Header ── */}
+        {/* Header */}
         <header
         className="flex items-center gap-3 px-4 h-14 shrink-0 z-10"
         style={{
@@ -145,12 +147,12 @@ export default function WorkspaceLayout({ taskId }: WorkspaceLayoutProps) {
         </motion.button>
       </header>
 
-      {/* ── Split Panels ── */}
+      {/* Split Panels */}
       <div className="flex-1 overflow-hidden">
         <Group orientation="horizontal" id="oracle-workspace-split" style={{ height: '100%' }}>
-          {/* ChatPanel */}
+          {/* ChatPanel — agora com sendUserMessage para intervenção */}
           <Panel defaultSize={42} minSize={28} maxSize={65}>
-            <ChatPanel taskId={taskId} />
+            <ChatPanel taskId={taskId} sendUserMessage={sendUserMessage} />
           </Panel>
 
           {/* Drag Handle */}
