@@ -1,0 +1,12 @@
+{
+  "id": "sk-example-003",
+  "title": "Correção: Erro de Typecasting any Implícito ou Nulo no TypeScript",
+  "description": "Como contornar erros severos de linter como TS2532 (Object is possibly undefined) aplicando Type Guards corretos ou Null Coalescing operators seguros sem ! cast.",
+  "tags": ["backend", "frontend", "typescript", "lint", "bugfix"],
+  "taskExample": "Fix the generic typescript possibly undefined Object error when traversing nested properties without breaking strict guidelines.",
+  "code": "/* \nAntes o script quebrava: \n  const value = obj.parent.child.property;\n  error TS2532: Object is possibly 'undefined'.\n*/\n\ninterface NodeSchema {\n  parent?: {\n    child?: {\n       property: string;\n    }\n  }\n}\n\nfunction getSafeProperty(obj: NodeSchema): string {\n  // Solução validada pelo ORACLE-OS:\n  // Usar optional chaining em acessos pesados e prover fallback\n  const value = obj?.parent?.child?.property ?? 'fallback-value';\n  return value;\n}\n\n// Em casos onde Type Guards explícitos são requeridos:\nfunction assertProperty(obj: NodeSchema | undefined): obj is NodeSchema {\n  return obj !== undefined;\n}\n",
+  "successRate": 0.95,
+  "usageCount": 42,
+  "createdAt": "2026-03-03T09:15:00.000Z",
+  "updatedAt": "2026-03-03T11:00:00.000Z"
+}

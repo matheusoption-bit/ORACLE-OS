@@ -1,0 +1,12 @@
+{
+  "id": "sk-example-002",
+  "title": "Solução: Endpoint Express TypeScript Validado com Zod",
+  "description": "Como montar rotas REST básicas usando Express com forte tipagem inferida pelo Zod nos Request bodies.",
+  "tags": ["backend", "express", "zod", "api"],
+  "taskExample": "Build a secure REST API endpoint to create users validating the body with zod and error handling.",
+  "code": "import { Router, Request, Response } from 'express';\nimport { z } from 'zod';\n\nconst router = Router();\n\nconst CreateUserSchema = z.object({\n  name: z.string().min(2),\n  email: z.string().email(),\n  password: z.string().min(6)\n});\n\nrouter.post('/users', async (req: Request, res: Response) => {\n  try {\n    const payload = CreateUserSchema.parse(req.body);\n    // Simular criacao logica...\n    res.status(201).json({ success: true, user: { id: 1, name: payload.name, email: payload.email } });\n  } catch (error) {\n    if (error instanceof z.ZodError) {\n       res.status(400).json({ error: 'Validation Failed', details: error.errors });\n       return;\n    }\n    res.status(500).json({ error: 'Internal Server Error' });\n  }\n});\n\nexport default router;",
+  "successRate": 1.0,
+  "usageCount": 8,
+  "createdAt": "2026-03-02T14:30:00.000Z",
+  "updatedAt": "2026-03-02T14:30:00.000Z"
+}

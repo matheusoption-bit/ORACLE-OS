@@ -11,12 +11,13 @@ import { executorAgent } from '../agents/executor.js';
 import { frontendExecutorAgent } from '../agents/frontend-executor.js';
 import { backendExecutorAgent } from '../agents/backend-executor.js';
 import { reviewerAgent } from '../agents/reviewer.js';
+import { saveTaskAsSkill } from '../rag/rag-pipeline.js';
 
 // ─── Tipos das arestas do grafo ───────────────────────────────────────────────
 
 type PlannerEdge = 'frontend_executor' | 'backend_executor' | 'executor' | typeof END;
 type ExecutorEdge = 'reviewer' | 'frontend_executor' | 'backend_executor' | 'executor';
-type ReviewerEdge = 'frontend_executor' | 'backend_executor' | 'executor' | typeof END;
+type ReviewerEdge = 'save_skill' | 'frontend_executor' | 'backend_executor' | 'executor' | typeof END;
 
 // ─── Função de roteamento por conteúdo ────────────────────────────────────────
 
@@ -136,6 +137,12 @@ export function createOracleGraph() {
     return reviewerAgent(state);
   })
 
+  // ── Nó: Memória RAG (Save Skill) ──────────────────────────────────────────────
+  .addNode('save_skill', async (state: OracleState) => {
+    await saveTaskAsSkill(state);
+    return state;
+  })
+
   // ── Arestas ───────────────────────────────────────────────────────────────────
 
   // START → planner
@@ -177,21 +184,31 @@ export function createOracleGraph() {
     }
   )
 
-  // reviewer → END (aprovado/rejeitado/max iter) ou re-execução
+  // reviewer → save_skill (se approved) ou re-execução (se precisa alterar) ou END (se falha hard)
   .addConditionalEdges(
     'reviewer',
     (state): ReviewerEdge => {
-      if (state.reviewStatus === 'approved' || state.reviewStatus === 'rejected') {
+      // Rejeição grave ou limite extourado e forçado
+      if (state.reviewStatus === 'rejected') {
         return END;
       }
+      
+      if (state.reviewStatus === 'approved') {
+         // Antes de encerrar, passa pela agência de memorização RAG (Skill Manager)
+         return 'save_skill';
+      }
+
       if (state.iterationCount >= 3) {
-        return END;
+        return 'save_skill'; // Forçou aprovação, então grava o que deu.
       }
       
       // needs_revision: volta para a primeira subtask re-roteando tudo
       return executor_router({ ...state, currentSubtask: 0 });
     }
-  );
+  )
+  
+  // save_skill → END
+  .addEdge('save_skill', END);
 
   return workflow.compile();
 }

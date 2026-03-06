@@ -12,6 +12,7 @@ import { OracleState, Subtask } from '../state/oracle-state.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import { retrieveRelevantSkills, formatSkillsAsContext } from '../rag/rag-pipeline.js';
 
 // ─── Zod Schemas ──────────────────────────────────────────────────────────────
 
@@ -73,6 +74,11 @@ export async function plannerAgent(
 
   const systemPrompt = loadPromptTemplate();
 
+  const skills = await retrieveRelevantSkills(state.task);
+  const ragContextBlock = skills.length > 0 
+    ? formatSkillsAsContext(skills)
+    : 'Nenhum contexto RAG de skills passadas disponível neste momento.';
+
   const userMessage = `${systemPrompt}
 
 <task>
@@ -80,7 +86,7 @@ ${state.task}
 </task>
 
 <context>
-${state.task ? 'Nenhum contexto RAG disponível neste momento.' : ''}
+${ragContextBlock}
 </context>
 
 <available_tools>

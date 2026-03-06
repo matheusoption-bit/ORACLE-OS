@@ -1,0 +1,13 @@
+{
+  "id": "mock-101",
+  "title": "Mock Skill",
+  "description": "Test persistency",
+  "tags": [
+    "test"
+  ],
+  "taskExample": "Create mock test",
+  "successRate": 1,
+  "usageCount": 1,
+  "createdAt": "2026-03-06T01:01:30.540Z",
+  "updatedAt": "2026-03-06T01:01:30.542Z"
+}

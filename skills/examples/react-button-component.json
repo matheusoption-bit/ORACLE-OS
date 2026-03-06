@@ -1,0 +1,12 @@
+{
+  "id": "sk-example-001",
+  "title": "Solução: Componente Botão Reutilizável em React Tailwind",
+  "description": "Criação de um botão simples funcional em React com tailwind. Inclui suporte a variantes e estado disabled. Utiliza cn (clsx) para merge de estilos.",
+  "tags": ["frontend", "react", "tailwind", "ui"],
+  "taskExample": "Create a reusable button component with secondary, danger and primary variants in React and Tailwind.",
+  "code": "import * as React from 'react';\nimport { cn } from '@/lib/utils';\n\ninterface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {\n  variant?: 'primary' | 'secondary' | 'danger';\n}\n\nexport const Button = React.forwardRef<HTMLButtonElement, ButtonProps>((\n  { className, variant = 'primary', ...props }, ref\n) => {\n  const baseStyles = 'inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none';\n  const variants = {\n    primary: 'bg-blue-600 text-white hover:bg-blue-700',\n    secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300',\n    danger: 'bg-red-600 text-white hover:bg-red-700',\n  };\n\n  return (\n    <button \n      ref={ref}\n      className={cn(baseStyles, variants[variant], className)}\n      {...props}\n    />\n  );\n});\nButton.displayName = 'Button';",
+  "successRate": 1.0,
+  "usageCount": 14,
+  "createdAt": "2026-03-01T10:00:00.000Z",
+  "updatedAt": "2026-03-01T10:00:00.000Z"
+}
