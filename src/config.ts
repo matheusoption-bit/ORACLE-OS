@@ -4,7 +4,7 @@
  * Suporta múltiplos providers: Anthropic, Groq, Gemini
  */
 
-import { DEFAULT_MODELS } from './models/model-registry';
+import { DEFAULT_MODELS } from './models/model-registry.js';
 
 export interface AgentModelConfig {
   modelId: string;    // ID do MODEL_CATALOG
@@ -35,6 +35,19 @@ export interface OracleConfig {
     defaultUserModel: string;     // modelo padrão na UI
   };
 }
+
+export const MODEL_COSTS = {
+  'claude-3-5-sonnet': { input: 0.003, output: 0.015 },  // por 1K tokens
+  'claude-3-haiku':    { input: 0.00025, output: 0.00125 },
+  'llama-3.3-70b':     { input: 0.00059, output: 0.00079 },
+  'gemini-1.5-flash':  { input: 0.000075, output: 0.0003 },
+};
+
+export const ROUTING_STRATEGY = {
+  'low':    'llama-3.3-70b',   // tasks simples → modelo barato
+  'medium': 'claude-3-haiku',  // tasks médias → equilibrado
+  'high':   'claude-3-5-sonnet' // tasks complexas → melhor modelo
+};
 
 export const config: OracleConfig = {
   agents: {

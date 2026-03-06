@@ -171,7 +171,7 @@ export const webSearchTool = new DynamicStructuredTool({
 
 // ─── Tipo e Registry ──────────────────────────────────────────────────────────
 
-export type AgentType = 'frontend' | 'backend' | 'devops' | 'data' | 'security';
+export type AgentType = 'frontend' | 'backend' | 'devops' | 'data' | 'security' | 'geral';
 
 const ALL_TOOLS = [fileReadTool, fileWriteTool, shellExecTool, githubCreateFileTool, webSearchTool];
 
@@ -181,6 +181,7 @@ const toolRegistry: Record<AgentType, DynamicStructuredTool[]> = {
   devops:   [fileReadTool, fileWriteTool, shellExecTool, githubCreateFileTool],
   data:     [fileReadTool, fileWriteTool, webSearchTool],
   security: [fileReadTool, shellExecTool],
+  geral:    [fileReadTool, fileWriteTool, shellExecTool, webSearchTool], // tools genéricas para agentes não especializados
 };
 
 export function getToolsForAgent(agentType: AgentType): DynamicStructuredTool[] {

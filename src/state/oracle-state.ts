@@ -12,7 +12,7 @@ export interface Subtask {
   type: SubtaskType;
   priority: number; // 1 (crítico) a 5 (baixo)
   dependsOn: string[]; // IDs de subtasks pré-requisito (Sprint 2)
-  assignedAgent: "frontend" | "backend" | "devops" | "data" | "security";
+  assignedAgent: "frontend" | "backend" | "devops" | "data" | "security" | "geral";
   dependencies: string[]; // alias retrocompatível com executor/reviewer
   estimatedDuration: number; // minutos
   tools: string[]; // nomes de ferramentas MCP

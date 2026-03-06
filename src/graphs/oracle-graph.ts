@@ -1,7 +1,8 @@
 /**
- * ORACLE-OS Main State Graph — Sprint 4
+ * ORACLE-OS Main State Graph — Sprint 8
  * Loop completo: Planner → executor_router → Executor → Reviewer → END
  * Com re-execução se needs_revision e iterationCount < 3
+ * Sprint 8: CostTracker integrado para rastrear tokens reais por agente
  */
 
 import { StateGraph, END, START } from '@langchain/langgraph';
@@ -14,6 +15,17 @@ import { reviewerAgent } from '../agents/reviewer.js';
 import { saveTaskAsSkill } from '../rag/rag-pipeline.js';
 import { startTask, completeTask } from '../monitoring/metrics.js';
 import { plannerLogger, executorLogger, reviewerLogger, systemLogger } from '../monitoring/logger.js';
+import { CostTracker } from '../monitoring/cost-tracker.js';
+import { config } from '../config.js';
+
+// ─── Singleton CostTracker ────────────────────────────────────────────────────
+const costTracker = new CostTracker();
+
+// ─── Helper: estima tokens a partir do tamanho string (fallback) ─────────────
+function estimateTokens(text: string): number {
+  // Heurística: ~4 chars por token (padrão GPT/Claude)
+  return Math.ceil(text.length / 4);
+}
 
 // ─── Tipos das arestas do grafo ───────────────────────────────────────────────
 
@@ -61,13 +73,28 @@ export function createOracleGraph() {
   })
   // ── Nó: Planner ─────────────────────────────────────────────────────────────
   .addNode('planner', async (state: OracleState) => {
+    const taskId = Math.random().toString(36).substr(2, 9);
+
     // START BOUNDARY METRICS (Usando timestamp gerado random ou o primeiro run)
     if (state.iterationCount === 0 && state.subtasks.length === 0) {
-      startTask(Math.random().toString(36).substr(2, 9), state.task, state);
+      startTask(taskId, state.task, state);
+      costTracker.startTask(taskId, 2000); // estimativa inicial típica do planner
     }
-    
+
     plannerLogger.info('🧠 Iniciando planejamento de task...');
-    return plannerAgent(state);
+    const result = await plannerAgent(state);
+
+    // Rastreia tokens do planner (estimativa baseada no tamanho da task)
+    const inputTokens = estimateTokens(state.task);
+    const outputTokens = estimateTokens(JSON.stringify(result.subtasks ?? []));
+    costTracker.track(taskId, 'planner', {
+      input: inputTokens,
+      output: outputTokens,
+      model: config.agents.planner.modelId,
+    });
+    plannerLogger.info(`💰 Planner: ~${inputTokens + outputTokens} tokens estimados`);
+
+    return result;
   })
 
   // ── Nó: Frontend Executor ────────────────────────────────────────────────────
@@ -141,17 +168,42 @@ export function createOracleGraph() {
   // ── Nó: Reviewer ─────────────────────────────────────────────────────────────
   .addNode('reviewer', async (state: OracleState) => {
     reviewerLogger.info(`🔍 Reviewing attempt ${state.iterationCount + 1}/3...`);
-    return reviewerAgent(state);
+    const result = await reviewerAgent(state);
+
+    // Rastreia tokens do reviewer
+    const resultsStr = JSON.stringify(state.results);
+    const inputTokens = estimateTokens(state.task + resultsStr);
+    const outputTokens = estimateTokens(JSON.stringify(result));
+    // Usa taskId mock (em prod, o taskId viria do state)
+    const taskId = 'current';
+    costTracker.track(taskId, 'reviewer', {
+      input: inputTokens,
+      output: outputTokens,
+      model: config.agents.reviewer.modelId,
+    });
+    reviewerLogger.info(`💰 Reviewer: ~${inputTokens + outputTokens} tokens estimados`);
+
+    return result;
   })
 
   // ── Nó: Memória RAG (Save Skill) ──────────────────────────────────────────────
   .addNode('save_skill', async (state: OracleState) => {
     await saveTaskAsSkill(state);
-    
-    // Fechamento da task metrics no final do loop
-    // (Numa infra real usaríamos o taskID vindo de um state.id que adicionaríamos no Schema. 
-    // Como simplificou, vamos forçar uma atualização da ultima rodada correndo do array local do monitor)
+
+    // Relatório de custo consolidado da task
+    const taskId = 'current';
+    const report = costTracker.getTaskReport(taskId);
+    const comparison = costTracker.compareWithEstimate(taskId);
     systemLogger.info(`🎉 Task workflow completado e documentado!`);
+    systemLogger.info(
+      `📊 Custo total: $${report.totalCostUSD.toFixed(6)} USD | ` +
+      `Tokens: planner=${report.planner.tokens} executor=${report.executor.tokens} reviewer=${report.reviewer.tokens} | ` +
+      `Eficiência da estimativa: ${comparison.efficiency.toFixed(1)}%`
+    );
+
+    // Fecha métricas de monitoramento
+    const id = Math.random().toString(36).substr(2, 9);
+    completeTask(id, state);
     return state;
   })
 

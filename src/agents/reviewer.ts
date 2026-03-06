@@ -3,34 +3,17 @@ import { HumanMessage } from '@langchain/core/messages';
 import { createModel } from '../models/model-registry.js';
 import { config } from '../config.js';
 import { OracleState } from '../state/oracle-state.js';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { REVIEWER_SYSTEM_PROMPT } from '../prompts/reviewer.prompt.js';
 
 // ─── Schemas Zod ──────────────────────────────────────────────────────────────
 
 const ReviewSchema = z.object({
   reviewStatus: z.enum(['approved', 'rejected', 'needs_revision']),
   revisionNotes: z.string().optional(),
+  learnings: z.string().optional(),
 });
 
 export type Review = z.infer<typeof ReviewSchema>;
-
-// ─── Carrega prompt template ──────────────────────────────────────────────────
-
-function loadReviewerPrompt(): string {
-  try {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dir = dirname(__filename);
-    const promptPath = resolve(__dir, '../../prompts/agents/reviewer-prompt.md');
-    return readFileSync(promptPath, 'utf-8');
-  } catch {
-    return `Você é o ORACLE Reviewer. Avalie os resultados dos Executors e decida:
-- approved: tudo concluído e funcional
-- needs_revision: há problemas corrigíveis — forneça revisionNotes específicos
-- rejected: falha grave ou estrutural`;
-  }
-}
 
 // ─── Força aprovação após max tentativas ──────────────────────────────────────
 
@@ -48,7 +31,7 @@ function buildForceApproveResult(state: OracleState): Partial<OracleState> {
 export async function reviewerAgent(
   state: OracleState
 ): Promise<Partial<OracleState>> {
-  console.log(`🔍 Reviewer: Avaliando resultados (tentativa ${state.iterationCount + 1}/3)...`);
+  console.log(`🔍 Reviewer: Avaliando resultados (tentativa \${state.iterationCount + 1}/3)...`);
 
   const nextIteration = state.iterationCount + 1;
 
@@ -58,7 +41,7 @@ export async function reviewerAgent(
   });
 
   const structuredModel = model.withStructuredOutput(ReviewSchema);
-  const systemPrompt = loadReviewerPrompt();
+  const systemPrompt = REVIEWER_SYSTEM_PROMPT;
 
   const resultsJson = JSON.stringify(state.results, null, 2);
   const errorsJson = state.errors.length > 0
@@ -66,30 +49,30 @@ export async function reviewerAgent(
     : '[]';
 
   const subtasksSummary = state.subtasks
-    .map((s) => `- [${s.id}] ${s.title} (${s.type}, prioridade ${s.priority})`)
+    .map((s) => `- [\${s.id}] \${s.title} (\${s.type}, prioridade \${s.priority})`)
     .join('\n');
 
-  const userPrompt = `${systemPrompt}
+  const userPrompt = `\${systemPrompt}
 
 <tarefa_original>
-${state.task}
+\${state.task}
 </tarefa_original>
 
 <subtasks_planejados>
-${subtasksSummary}
+\${subtasksSummary}
 </subtasks_planejados>
 
 <resultados_dos_executors>
-${resultsJson}
+\${resultsJson}
 </resultados_dos_executors>
 
 <erros_capturados>
-${errorsJson}
+\${errorsJson}
 </erros_capturados>
 
 <contexto_iteracao>
-Tentativa: ${nextIteration} de 3
-${state.revisionNotes ? `Notas da revisão anterior: ${state.revisionNotes}` : ''}
+Tentativa: \${nextIteration} de 3
+\${state.revisionNotes ? \`Notas da revisão anterior: \${state.revisionNotes}\` : ''}
 </contexto_iteracao>
 
 Avalie o trabalho produzido e retorne sua decisão estruturada considerando as diretrizes e critérios.`;
@@ -103,7 +86,11 @@ Avalie o trabalho produzido e retorne sua decisão estruturada considerando as d
     if ((finalStatus === 'rejected' || finalStatus === 'needs_revision') && nextIteration >= 3) {
       console.warn('⚠️  Reviewer: Limite máximo configurado atingido. Forçando aprovação com aviso.');
       finalStatus = 'approved';
-      finalNotes = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED]\nTentativas se esgotaram.\nÚltimo feedback: ${finalNotes || 'Nenhum'}`;
+      finalNotes = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED]\nTentativas se esgotaram.\nÚltimo feedback: \${finalNotes || 'Nenhum'}`;
+    }
+    
+    if(review.learnings) {
+        console.log(`[Learnings Extraídas] \${review.learnings.substring(0, 100)}...`);
     }
 
     return {

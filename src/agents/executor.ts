@@ -1,7 +1,7 @@
 /**
- * ORACLE-OS Executor Agent — Sprint 3
+ * ORACLE-OS Executor Agent — Sprint 8
  * Agente LangGraph genérico que executa subtasks via tool-calling
- * Roteia por assignedAgent para frontend/backend/genérico
+ * Agora integrando sistema de Tags (Lovable) e EXECUTOR_SYSTEM_PROMPT
  */
 
 import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
@@ -10,9 +10,38 @@ import { createModel } from '../models/model-registry.js';
 import { config } from '../config.js';
 import { OracleState, Subtask } from '../state/oracle-state.js';
 import { getToolsForAgent } from '../tools/tool-registry.js';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { EXECUTOR_SYSTEM_PROMPT } from '../prompts/executor.prompt.js';
+
+// ─── Tag Parser de Respostas de LLM (Padrão Lovable) ──────────────────────────
+
+function extract(content: string, tag: string): string | undefined {
+  const match = content.match(new RegExp(`<\\s*\${tag}[^>]*>([\\s\\S]*?)</\\s*\${tag}\\s*>`, 'i'));
+  return match ? match[1].trim() : undefined;
+}
+
+function extractAll(content: string, tag: string): Array<{ content: string; path?: string }> {
+  // RegExp para lidar com `<oracle-write path="foo">...` ou sem path
+  const regex = new RegExp(`<\\s*\${tag}(?:\\s+path=["']([^"']+)["'])?[^>]*>([\\s\\S]*?)</\\s*\${tag}\\s*>`, 'gi');
+  const results = [];
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    results.push({
+      path: match[1],         // Captura o path se existir
+      content: match[2].trim() // Captura o conteúdo
+    });
+  }
+  return results;
+}
+
+export function parseOracleTags(output: string) {
+  return {
+    thinking: extract(output, 'oracle-thinking'),
+    writes: extractAll(output, 'oracle-write'),
+    deletes: extractAll(output, 'oracle-delete'),
+    success: extract(output, 'oracle-success'),
+    error: extract(output, 'oracle-error'),
+  };
+}
 
 // ─── Resultado de execução de subtask ─────────────────────────────────────────
 
@@ -23,19 +52,7 @@ export interface SubtaskResult {
   toolCallsExecuted: string[];
   filesModified: string[];
   timestamp: string;
-}
-
-// ─── Carrega prompt template ──────────────────────────────────────────────────
-
-function loadExecutorPrompt(): string {
-  try {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dir = dirname(__filename);
-    return readFileSync(resolve(__dir, '../../prompts/agents/executor-prompt.md'), 'utf-8');
-  } catch {
-    return `Você é o ORACLE Executor. Execute a subtask usando as ferramentas disponíveis.
-Retorne um JSON com status, filesModified, commandsRun e validationResult.`;
-  }
+  parsedTags?: ReturnType<typeof parseOracleTags>;
 }
 
 // ─── Tool-calling loop ────────────────────────────────────────────────────────
@@ -45,20 +62,21 @@ export async function runToolLoop(
   taskPrompt: string,
   tools: DynamicStructuredTool[],
   maxIterations = 8
-): Promise<{ output: string; toolCallsExecuted: string[]; filesModified: string[] }> {
+): Promise<{ output: string; toolCallsExecuted: string[]; filesModified: string[]; parsedTags: ReturnType<typeof parseOracleTags> }> {
   const model = createModel({
     modelId: config.agents.executor.modelId,
     temperature: config.agents.executor.temperature,
   });
 
-  const modelWithTools = model.bindTools(tools);
+  const modelWithTools = model.bindTools ? model.bindTools(tools) : model;
 
   const messages: (HumanMessage | AIMessage | ToolMessage)[] = [
-    new HumanMessage(`${systemPrompt}\n\n${taskPrompt}`),
+    new HumanMessage(`\${systemPrompt}\n\n\${taskPrompt}`),
   ];
 
   const toolCallsExecuted: string[] = [];
   const filesModified: string[] = [];
+  let finalResponseContent = '';
 
   for (let i = 0; i < maxIterations; i++) {
     const response = await modelWithTools.invoke(messages) as AIMessage;
@@ -67,14 +85,20 @@ export async function runToolLoop(
     const toolCalls = response.tool_calls ?? [];
     if (toolCalls.length === 0) {
       // Sem mais tool calls → resposta final
-      return {
-        output: typeof response.content === 'string'
+      finalResponseContent = typeof response.content === 'string'
           ? response.content
-          : JSON.stringify(response.content),
+          : JSON.stringify(response.content);
+      return {
+        output: finalResponseContent,
         toolCallsExecuted,
         filesModified,
+        parsedTags: parseOracleTags(finalResponseContent)
       };
     }
+
+    let loopOutput = typeof response.content === 'string' ? response.content : '';
+    // Concatenamos a resposta no loop para ajudar no extrator de tags se ele for particionado (menos provável, mas bom tentar capturar)
+    finalResponseContent += loopOutput + '\n';
 
     // Executa cada tool call e acumula resultados
     for (const toolCall of toolCalls) {
@@ -82,14 +106,14 @@ export async function runToolLoop(
       if (!tool) {
         messages.push(new ToolMessage({
           tool_call_id: toolCall.id ?? '',
-          content: JSON.stringify({ error: `Tool "${toolCall.name}" não encontrada.` }),
+          content: JSON.stringify({ error: `Tool "\${toolCall.name}" não encontrada.` }),
         }));
         continue;
       }
 
       toolCallsExecuted.push(toolCall.name);
 
-      // Rastreia operações de arquivo
+      // Rastreia operações de arquivo nas tags da tool antiga (se houver)
       if (toolCall.name.startsWith('file_')) {
         const path = (toolCall.args as Record<string, string>)['path'];
         if (path) filesModified.push(path);
@@ -113,9 +137,10 @@ export async function runToolLoop(
 
   // Esgotou iterações
   return {
-    output: 'Execução interrompida: máximo de iterações atingido.',
+    output: 'Execução interrompida: máximo de iterações atingido.\n' + finalResponseContent,
     toolCallsExecuted,
     filesModified,
+    parsedTags: parseOracleTags(finalResponseContent)
   };
 }
 
@@ -123,21 +148,21 @@ export async function runToolLoop(
 
 export async function executeSubtask(subtask: Subtask): Promise<SubtaskResult> {
   const tools = getToolsForAgent(subtask.assignedAgent);
-  const systemPrompt = loadExecutorPrompt();
+  const systemPrompt = EXECUTOR_SYSTEM_PROMPT;
 
   const taskPrompt = `<subtask>
-ID: ${subtask.id}
-Título: ${subtask.title}
-Descrição: ${subtask.description}
-Tipo: ${subtask.type}
-Agente: ${subtask.assignedAgent}
-Critério de validação: ${subtask.validationCriteria}
-Ferramentas MCP disponíveis: ${subtask.tools.join(', ')}
+ID: \${subtask.id}
+Título: \${subtask.title}
+Descrição: \${subtask.description}
+Tipo: \${subtask.type}
+Agente: \${subtask.assignedAgent}
+Critério de validação: \${subtask.validationCriteria}
+Ferramentas MCP disponíveis: \${subtask.tools.join(', ')}
 </subtask>
 
-Execute esta subtask passo a passo usando as ferramentas disponíveis.`;
+Execute esta subtask passo a passo usando as ferramentas disponíveis. Não esqueça de utilizar as tags <oracle-thinking> e ao final <oracle-success> ou <oracle-error> explicadas no system prompt!`;
 
-  const { output, toolCallsExecuted, filesModified } = await runToolLoop(
+  const { output, toolCallsExecuted, filesModified, parsedTags } = await runToolLoop(
     systemPrompt,
     taskPrompt,
     tools
@@ -145,11 +170,12 @@ Execute esta subtask passo a passo usando as ferramentas disponíveis.`;
 
   return {
     subtaskId: subtask.id,
-    status: 'success',
+    status: parsedTags.error ? 'failed' : 'success', // Se cuspiu tag de erro marcamos como falha
     output,
     toolCallsExecuted,
-    filesModified,
+    filesModified: [...new Set([...filesModified, ...parsedTags.writes.map(w => w.path).filter(Boolean) as string[]])], // Junta files alterados via tools antigas com as oracle tags, remove nulls e dedup
     timestamp: new Date().toISOString(),
+    parsedTags,
   };
 }
 
@@ -168,10 +194,15 @@ export async function executorAgent(
     return { currentSubtask: state.currentSubtask };
   }
 
-  console.log(`⚙️  Executor [${subtask.assignedAgent}]: ${subtask.title}`);
+  console.log(`⚙️  Executor [\${subtask.assignedAgent}]: \${subtask.title}`);
 
   try {
     const result = await executeSubtask(subtask);
+    
+    if(result.parsedTags?.thinking) {
+        // Exibimos silenciosamente algo para demonstrar trace
+        console.log(`[Thinking...] \${result.parsedTags.thinking.substring(0, 100)}...`);
+    }
 
     return {
       results: { ...state.results, [subtask.id]: result },
@@ -179,7 +210,7 @@ export async function executorAgent(
     };
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    console.error(`❌ Executor falhou em ${subtask.id}:`, error.message);
+    console.error(`❌ Executor falhou em \${subtask.id}:`, error.message);
 
     return {
       results: {
