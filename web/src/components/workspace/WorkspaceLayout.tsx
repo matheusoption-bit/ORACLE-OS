@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation';
 import { useOracleStore, type TaskStatus } from '@/stores/oracle.store';
 import { ChatPanel } from './ChatPanel';
 import Workbench from './Workbench';
+import { Sidebar } from '../sidebar/Sidebar';
 
 // ─── StatusBadge ──────────────────────────────────────────────────────────
 
@@ -82,9 +83,14 @@ export default function WorkspaceLayout({ taskId }: WorkspaceLayoutProps) {
     taskPrompt.length > 48 ? taskPrompt.slice(0, 45) + '…' : taskPrompt || `Task ${taskId}`;
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: '#080808' }}>
-      {/* ── Header ── */}
-      <header
+    <div className="flex h-screen overflow-hidden" style={{ background: '#080808' }}>
+      {/* ── Sidebar (Esquerda) ── */}
+      <Sidebar />
+
+      {/* ── Conteúdo Principal ── */}
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* ── Header ── */}
+        <header
         className="flex items-center gap-3 px-4 h-14 shrink-0 z-10"
         style={{
           background: 'var(--glass-1)',
@@ -160,11 +166,12 @@ export default function WorkspaceLayout({ taskId }: WorkspaceLayoutProps) {
             </div>
           </Separator>
 
-          {/* Workbench (placeholder Task 3) */}
+          {/* Workbench (Painel Direito) */}
           <Panel defaultSize={58} minSize={30}>
             <Workbench />
           </Panel>
         </Group>
+      </div>
       </div>
     </div>
   );
