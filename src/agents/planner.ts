@@ -1,7 +1,7 @@
 /**
- * ORACLE-OS Planner Agent — Sprint 8
+ * ORACLE-OS Planner Agent — Sprint 10
  * Decompõe tarefas em subtasks estruturadas com output Zod
- * Integrado com o Prompt Enhancer e a nova Library de Prompts
+ * Integrado com o Prompt Enhancer, Library de Prompts e shortTermMemory
  */
 
 import { z } from 'zod';
@@ -44,6 +44,7 @@ const enhancer = new PromptEnhancer();
 /**
  * plannerAgent — nó LangGraph
  * Recebe o estado compartilhado e retorna atualização de estado com subtasks.
+ * Agora injeta shortTermMemory no prompt para consciência contextual.
  */
 export async function plannerAgent(
   state: OracleState
@@ -67,6 +68,11 @@ export async function plannerAgent(
   // 2. Usar o PLANNER_SYSTEM_PROMPT importado da Prompts Library
   const systemPrompt = PLANNER_SYSTEM_PROMPT;
 
+  // 3. Injetar memória de curto prazo se disponível (ex: em re-planejamento após revisão)
+  const memoryBlock = (state.shortTermMemory ?? []).length > 0
+    ? `\n<short_term_memory>\nContexto de execuções anteriores neste ciclo:\n${state.shortTermMemory!.map((m, i) => `[${i + 1}] ${m}`).join('\n')}\n</short_term_memory>`
+    : '';
+
   const userMessage = `\${systemPrompt}
 
 <enhanced_task>
@@ -80,7 +86,7 @@ export async function plannerAgent(
 <context>
 \${ragContextBlock}
 </context>
-
+${memoryBlock}
 <available_tools>
 - file_read, file_write, file_list
 - shell_exec, shell_npm, shell_git
@@ -99,7 +105,6 @@ Retorne um plano JSON completo com todos os campos obrigatórios.`;
   const subtasks: Subtask[] = result.subtasks.map((s: SubtaskOutput) => ({
     ...s,
     dependencies: s.dependsOn,
-    // garantindo fallback seguro pro assignedAgent se o zod aceitou string fora do union estrito
     assignedAgent: ['frontend', 'backend', 'devops', 'data', 'security'].includes(s.assignedAgent) ? s.assignedAgent as any : 'backend'
   }));
 
@@ -116,4 +121,3 @@ export const plannerAgentLegacy = {
     return plannerAgent(state);
   },
 };
-

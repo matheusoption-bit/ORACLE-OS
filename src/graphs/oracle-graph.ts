@@ -1,9 +1,11 @@
 /**
- * ORACLE-OS Main State Graph — Sprint 9
+ * ORACLE-OS Main State Graph — Sprint 10
  * Loop completo: Planner → executor_router → Executor → Reviewer → END
  * Com re-execução se needs_revision e iterationCount < 3
  * Sprint 8: CostTracker integrado para rastrear tokens reais por agente
  * Sprint 9: Skill Generator inteligente + logging estruturado aprimorado
+ * Sprint 10: shortTermMemory para consciência contextual entre agentes
+ *            + emissão de eventos agent:cost para métricas em tempo real
  */
 
 import { StateGraph, END, START } from '@langchain/langgraph';
@@ -23,9 +25,11 @@ import { config } from '../config.js';
 // ─── Singleton CostTracker ────────────────────────────────────────────────────
 const costTracker = new CostTracker();
 
+// ─── Exportar costTracker para uso externo (ex: OracleBridge) ─────────────────
+export { costTracker };
+
 // ─── Helper: estima tokens a partir do tamanho string (fallback) ─────────────
 function estimateTokens(text: string): number {
-  // Heurística: ~4 chars por token (padrão GPT/Claude)
   return Math.ceil(text.length / 4);
 }
 
@@ -39,7 +43,7 @@ type ReviewerEdge = 'save_skill' | 'frontend_executor' | 'backend_executor' | 'e
 
 function executor_router(state: OracleState): 'frontend_executor' | 'backend_executor' | 'executor' {
   const subtask = state.subtasks[state.currentSubtask];
-  if (!subtask) return 'executor'; // Fallback seguro se não houver task atual
+  if (!subtask) return 'executor';
 
   const typeLower = (subtask.type || '').toLowerCase();
   
@@ -51,7 +55,6 @@ function executor_router(state: OracleState): 'frontend_executor' | 'backend_exe
     return 'backend_executor';
   }
 
-  // Fallback baseado no assignAgent original caso não bata a keyword (mantendo certa retrocompatibilidade)
   if (subtask.assignedAgent === 'frontend') return 'frontend_executor';
   if (subtask.assignedAgent === 'backend') return 'backend_executor';
 
@@ -71,22 +74,22 @@ export function createOracleGraph() {
       reviewStatus: null,
       revisionNotes: null,
       iterationCount: null,
+      shortTermMemory: null,
     },
   })
   // ── Nó: Planner ─────────────────────────────────────────────────────────────
   .addNode('planner', async (state: OracleState) => {
     const taskId = Math.random().toString(36).substr(2, 9);
 
-    // START BOUNDARY METRICS (Usando timestamp gerado random ou o primeiro run)
     if (state.iterationCount === 0 && state.subtasks.length === 0) {
       startTask(taskId, state.task, state);
-      costTracker.startTask(taskId, 2000); // estimativa inicial típica do planner
+      costTracker.startTask(taskId, 2000);
     }
 
     plannerLogger.info('🧠 Iniciando planejamento de task...');
     const result = await plannerAgent(state);
 
-    // Rastreia tokens do planner (estimativa baseada no tamanho da task)
+    // Rastreia tokens do planner
     const inputTokens = estimateTokens(state.task);
     const outputTokens = estimateTokens(JSON.stringify(result.subtasks ?? []));
     costTracker.track(taskId, 'planner', {
@@ -96,7 +99,14 @@ export function createOracleGraph() {
     });
     plannerLogger.info(`💰 Planner: ~${inputTokens + outputTokens} tokens estimados`);
 
-    return result;
+    // Adiciona resumo do planner à memória de curto prazo
+    const subtaskTitles = (result.subtasks ?? []).map((s: any) => s.title).join(', ');
+    const memoryEntry = `[Planner] Decompôs a tarefa em ${(result.subtasks ?? []).length} subtasks: ${subtaskTitles}`;
+
+    return {
+      ...result,
+      shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
+    };
   })
 
   // ── Nó: Frontend Executor ────────────────────────────────────────────────────
@@ -111,12 +121,18 @@ export function createOracleGraph() {
 
     try {
       const result = await frontendExecutorAgent(subtask);
+
+      const memoryEntry = `[Executor/frontend] Subtask "${subtask.title}" → ${result.status}. Files: ${result.filesModified.join(', ')}`;
+
       return {
         results: { ...state.results, [subtask.id]: result },
         currentSubtask: state.currentSubtask + 1,
+        shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
       };
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      const memoryEntry = `[Executor/frontend] Subtask "${subtask.title}" → FAILED: ${error.message}`;
+
       return {
         results: {
           ...state.results,
@@ -124,6 +140,7 @@ export function createOracleGraph() {
         },
         errors: [...(state.errors ?? []), error],
         currentSubtask: state.currentSubtask + 1,
+        shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
       };
     }
   })
@@ -140,12 +157,18 @@ export function createOracleGraph() {
 
     try {
       const result = await backendExecutorAgent(subtask);
+
+      const memoryEntry = `[Executor/backend] Subtask "${subtask.title}" → ${result.status}. Files: ${result.filesModified.join(', ')}`;
+
       return {
         results: { ...state.results, [subtask.id]: result },
         currentSubtask: state.currentSubtask + 1,
+        shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
       };
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      const memoryEntry = `[Executor/backend] Subtask "${subtask.title}" → FAILED: ${error.message}`;
+
       return {
         results: {
           ...state.results,
@@ -153,6 +176,7 @@ export function createOracleGraph() {
         },
         errors: [...(state.errors ?? []), error],
         currentSubtask: state.currentSubtask + 1,
+        shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
       };
     }
   })
@@ -176,7 +200,6 @@ export function createOracleGraph() {
     const resultsStr = JSON.stringify(state.results);
     const inputTokens = estimateTokens(state.task + resultsStr);
     const outputTokens = estimateTokens(JSON.stringify(result));
-    // Usa taskId mock (em prod, o taskId viria do state)
     const taskId = 'current';
     costTracker.track(taskId, 'reviewer', {
       input: inputTokens,
@@ -185,15 +208,20 @@ export function createOracleGraph() {
     });
     reviewerLogger.info(`💰 Reviewer: ~${inputTokens + outputTokens} tokens estimados`);
 
-    return result;
+    // Adiciona resumo do reviewer à memória de curto prazo
+    const memoryEntry = `[Reviewer] Tentativa ${(result.iterationCount ?? state.iterationCount + 1)}/3 → ${result.reviewStatus}.` +
+      (result.revisionNotes ? ` Notas: ${result.revisionNotes.substring(0, 200)}` : '');
+
+    return {
+      ...result,
+      shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
+    };
   })
 
   // ── Nó: Memória RAG (Save Skill) ──────────────────────────────────────────────────
   .addNode('save_skill', async (state: OracleState) => {
-    // 1. Salva a tarefa no RAG (método legado — salva snapshot bruto)
     await saveTaskAsSkill(state);
 
-    // 2. Gera skill inteligente via LLM (Sprint 9 — abstrai padrões reutilizáveis)
     try {
       const generatedSkill = await generateSkillFromTask(state);
       if (generatedSkill) {
@@ -209,7 +237,6 @@ export function createOracleGraph() {
       });
     }
 
-    // 3. Relatório de custo consolidado da task
     const taskId = 'current';
     const report = costTracker.getTaskReport(taskId);
     const comparison = costTracker.compareWithEstimate(taskId);
@@ -223,7 +250,6 @@ export function createOracleGraph() {
       estimateEfficiency: comparison.efficiency.toFixed(1) + '%',
     });
 
-    // 4. Fecha métricas de monitoramento
     const id = Math.random().toString(36).substr(2, 9);
     completeTask(id, state);
     return state;
@@ -273,10 +299,9 @@ export function createOracleGraph() {
   .addConditionalEdges(
     'reviewer',
     (state): ReviewerEdge => {
-      // Rejeição grave ou limite extourado e forçado
       if (state.reviewStatus === 'rejected') {
-        const id = Math.random().toString(36).substr(2, 9); // Mock ID
-        completeTask(id, state); // Fallback caso não possamos rastrear real ID aqui, a lógica certa é guardar TaskMetricsID no State.
+        const id = Math.random().toString(36).substr(2, 9);
+        completeTask(id, state);
         systemLogger.error(`Task finalizada com rejeição pelo Reviewer.`);
         return END;
       }
@@ -286,7 +311,7 @@ export function createOracleGraph() {
       }
 
       if (state.iterationCount >= 3) {
-        return 'save_skill'; // Forçou aprovação, então grava o que deu.
+        return 'save_skill';
       }
       
       // needs_revision: volta para a primeira subtask re-roteando tudo

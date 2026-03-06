@@ -1,6 +1,7 @@
 /**
- * ORACLE-OS State Schema
+ * ORACLE-OS State Schema — Sprint 10
  * Defines the shared state passed between agents
+ * Agora com shortTermMemory para consciência contextual entre agentes
  */
 
 export type SubtaskType = "code" | "file" | "search" | "review" | "other";
@@ -28,6 +29,15 @@ export interface OracleState {
   reviewStatus: 'pending' | 'approved' | 'rejected' | 'needs_revision';
   revisionNotes?: string; // feedback do Reviewer para o Executor re-executar
   iterationCount: number;
+
+  /**
+   * Memória de curto prazo compartilhada entre agentes.
+   * Cada agente (Planner, Executor, Reviewer) adiciona um resumo
+   * de sua decisão ou resultado a este array. O conteúdo é injetado
+   * nos prompts dos agentes subsequentes para melhorar a consciência
+   * contextual do grafo.
+   */
+  shortTermMemory: string[];
 }
 
 export const createInitialState = (task: string): OracleState => ({
@@ -38,4 +48,5 @@ export const createInitialState = (task: string): OracleState => ({
   errors: [],
   reviewStatus: "pending",
   iterationCount: 0,
+  shortTermMemory: [],
 });
