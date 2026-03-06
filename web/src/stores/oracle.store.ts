@@ -14,6 +14,8 @@ export type TaskStatus =
 
 export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'disconnected';
 
+export type WorkbenchTab = 'files' | 'logs' | 'preview' | 'code' | 'terminal' | 'graph' | 'metrics';
+
 export interface FileEntry {
   path: string;
   content: string;
@@ -39,6 +41,7 @@ interface OracleStore {
   messages: ChatMessage[];
   subtasks: Subtask[];
   currentSubtask: number;
+  iterationCount: number;
   files: Record<string, FileEntry>;
   activeFile: string | null;
   logs: string[];
@@ -48,7 +51,7 @@ interface OracleStore {
   // ── UI state ──
   wsStatus: WsStatus;
   selectedModel: string;
-  activeTab: 'files' | 'logs' | 'preview';
+  activeTab: WorkbenchTab;
   isPlanExpanded: boolean;
 
   // ── History (persisted) ──
@@ -63,6 +66,7 @@ interface OracleStore {
   setError: (message: string) => void;
   completeTask: (metrics: TaskMetrics) => void;
   resetWorkspace: () => void;
+  setIterationCount: (count: number) => void;
 
   // ── Actions: Messages ──
   appendMessage: (msg: Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>) => void;
@@ -75,7 +79,7 @@ interface OracleStore {
 
   // ── Actions: UI ──
   setWsStatus: (status: WsStatus) => void;
-  setActiveTab: (tab: OracleStore['activeTab']) => void;
+  setActiveTab: (tab: WorkbenchTab) => void;
   togglePlan: () => void;
   setSelectedModel: (model: string) => void;
 
@@ -96,6 +100,7 @@ export const useOracleStore = create<OracleStore>()(
       messages: [],
       subtasks: [],
       currentSubtask: 0,
+      iterationCount: 0,
       files: {},
       activeFile: null,
       logs: [],
@@ -118,6 +123,7 @@ export const useOracleStore = create<OracleStore>()(
           messages: [],
           subtasks: [],
           currentSubtask: 0,
+          iterationCount: 0,
           files: {},
           activeFile: null,
           logs: [],
@@ -151,6 +157,8 @@ export const useOracleStore = create<OracleStore>()(
 
       setStatus: (status) => set({ taskStatus: status }),
 
+      setIterationCount: (count) => set({ iterationCount: count }),
+
       setError: (message) => {
         set({ taskStatus: 'error', error: message });
         get().appendMessage({ role: 'error', content: message });
@@ -181,6 +189,7 @@ export const useOracleStore = create<OracleStore>()(
           messages: [],
           subtasks: [],
           currentSubtask: 0,
+          iterationCount: 0,
           files: {},
           activeFile: null,
           logs: [],
@@ -254,13 +263,17 @@ export const useOracleStore = create<OracleStore>()(
 
       appendLog: (log) =>
         set((state) => ({
-          logs: [...state.logs.slice(-199), `[${new Date().toLocaleTimeString()}] ${log}`],
+          logs: [...state.logs.slice(-499), `[${new Date().toLocaleTimeString()}] ${log}`],
         })),
     }),
     {
       name: 'oracle-os-storage',
-      // Persiste apenas o histórico de tasks — sem dados sensíveis
-      partialize: (state) => ({ taskHistory: state.taskHistory, selectedModel: state.selectedModel }),
+      // Persiste apenas o histórico de tasks e preferências — sem dados sensíveis
+      partialize: (state) => ({
+        taskHistory: state.taskHistory,
+        selectedModel: state.selectedModel,
+        isPlanExpanded: state.isPlanExpanded,
+      }),
     }
   )
 );

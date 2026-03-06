@@ -1,16 +1,18 @@
 'use client';
 
 import { motion, AnimatePresence } from 'framer-motion';
-import { Eye, Code2, Terminal, FolderOpen } from 'lucide-react';
+import { Eye, Code2, Terminal, FolderOpen, GitBranch, BarChart2 } from 'lucide-react';
 import { useOracleStore } from '@/stores/oracle.store';
 import { PreviewPanel } from './PreviewPanel';
 import { CodeEditor } from './CodeEditor';
 import { TerminalPanel } from './TerminalPanel';
 import { FileTree } from './FileTree';
+import { AgentGraphView } from './AgentGraphView';
+import { MetricsPanel } from './MetricsPanel';
 
-// ─── Tipos ────────────────────────────────────────────────────────────────
+// ─── Tipos ────────────────────────────────────────────────────────────────────────────────
 
-type WorkbenchTab = 'preview' | 'code' | 'terminal' | 'files';
+type WorkbenchTab = 'preview' | 'code' | 'terminal' | 'files' | 'graph' | 'metrics';
 
 const TABS: {
   id: WorkbenchTab;
@@ -21,6 +23,8 @@ const TABS: {
   { id: 'code',     label: 'Code',     icon: Code2      },
   { id: 'terminal', label: 'Terminal', icon: Terminal   },
   { id: 'files',    label: 'Files',    icon: FolderOpen },
+  { id: 'graph',    label: 'Grafo',    icon: GitBranch  },
+  { id: 'metrics',  label: 'Métricas', icon: BarChart2  },
 ];
 
 // ─── Workbench ────────────────────────────────────────────────────────────
@@ -119,6 +123,16 @@ export default function Workbench() {
             {activeTab === 'code'     && <CodeEditor />}
             {activeTab === 'terminal' && <TerminalPanel />}
             {activeTab === 'files'    && <FileTree />}
+            {activeTab === 'graph'    && (
+              <div className="h-full overflow-y-auto p-3">
+                <AgentGraphView />
+              </div>
+            )}
+            {activeTab === 'metrics'  && (
+              <div className="h-full overflow-y-auto p-3">
+                <MetricsPanel />
+              </div>
+            )}
           </motion.div>
         </AnimatePresence>
       </div>

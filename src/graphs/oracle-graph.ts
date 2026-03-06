@@ -1,8 +1,9 @@
 /**
- * ORACLE-OS Main State Graph — Sprint 8
+ * ORACLE-OS Main State Graph — Sprint 9
  * Loop completo: Planner → executor_router → Executor → Reviewer → END
  * Com re-execução se needs_revision e iterationCount < 3
  * Sprint 8: CostTracker integrado para rastrear tokens reais por agente
+ * Sprint 9: Skill Generator inteligente + logging estruturado aprimorado
  */
 
 import { StateGraph, END, START } from '@langchain/langgraph';
@@ -13,6 +14,7 @@ import { frontendExecutorAgent } from '../agents/frontend-executor.js';
 import { backendExecutorAgent } from '../agents/backend-executor.js';
 import { reviewerAgent } from '../agents/reviewer.js';
 import { saveTaskAsSkill } from '../rag/rag-pipeline.js';
+import { generateSkillFromTask } from '../rag/skill-generator.js';
 import { startTask, completeTask } from '../monitoring/metrics.js';
 import { plannerLogger, executorLogger, reviewerLogger, systemLogger } from '../monitoring/logger.js';
 import { CostTracker } from '../monitoring/cost-tracker.js';
@@ -186,27 +188,46 @@ export function createOracleGraph() {
     return result;
   })
 
-  // ── Nó: Memória RAG (Save Skill) ──────────────────────────────────────────────
+  // ── Nó: Memória RAG (Save Skill) ──────────────────────────────────────────────────
   .addNode('save_skill', async (state: OracleState) => {
+    // 1. Salva a tarefa no RAG (método legado — salva snapshot bruto)
     await saveTaskAsSkill(state);
 
-    // Relatório de custo consolidado da task
+    // 2. Gera skill inteligente via LLM (Sprint 9 — abstrai padrões reutilizáveis)
+    try {
+      const generatedSkill = await generateSkillFromTask(state);
+      if (generatedSkill) {
+        systemLogger.info(`🧠 Nova skill gerada: "${generatedSkill.title}" (id=${generatedSkill.id})`, {
+          skillId: generatedSkill.id,
+          tags: generatedSkill.tags,
+          score: generatedSkill.successRate,
+        });
+      }
+    } catch (skillErr) {
+      systemLogger.warn('Falha na geração de skill inteligente (não crítico).', {
+        error: String(skillErr),
+      });
+    }
+
+    // 3. Relatório de custo consolidado da task
     const taskId = 'current';
     const report = costTracker.getTaskReport(taskId);
     const comparison = costTracker.compareWithEstimate(taskId);
-    systemLogger.info(`🎉 Task workflow completado e documentado!`);
-    systemLogger.info(
-      `📊 Custo total: $${report.totalCostUSD.toFixed(6)} USD | ` +
-      `Tokens: planner=${report.planner.tokens} executor=${report.executor.tokens} reviewer=${report.reviewer.tokens} | ` +
-      `Eficiência da estimativa: ${comparison.efficiency.toFixed(1)}%`
-    );
+    systemLogger.info('🎉 Task workflow completado e documentado!', {
+      totalCostUSD: report.totalCostUSD.toFixed(6),
+      tokens: {
+        planner:  report.planner.tokens,
+        executor: report.executor.tokens,
+        reviewer: report.reviewer.tokens,
+      },
+      estimateEfficiency: comparison.efficiency.toFixed(1) + '%',
+    });
 
-    // Fecha métricas de monitoramento
+    // 4. Fecha métricas de monitoramento
     const id = Math.random().toString(36).substr(2, 9);
     completeTask(id, state);
     return state;
   })
-
   // ── Arestas ───────────────────────────────────────────────────────────────────
 
   // START → planner

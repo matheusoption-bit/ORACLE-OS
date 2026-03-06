@@ -1,7 +1,8 @@
 /**
- * ORACLE-OS Tool Registry — Sprint 3
+ * ORACLE-OS Tool Registry — Sprint 3 + Sprint 9
  * Ferramentas MCP reais usando DynamicStructuredTool do LangChain
  * file_read, file_write, shell_exec, github_create_file, web_search
+ * + db_migrate, test_run, deployment_deploy (Sprint 9)
  */
 
 import { DynamicStructuredTool } from '@langchain/core/tools';
@@ -10,6 +11,7 @@ import { promises as fs } from 'fs';
 import { dirname } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { dbMigrateTool, testRunTool, deploymentDeployTool } from './extended-tools.js';
 
 const execAsync = promisify(exec);
 
@@ -173,15 +175,24 @@ export const webSearchTool = new DynamicStructuredTool({
 
 export type AgentType = 'frontend' | 'backend' | 'devops' | 'data' | 'security' | 'geral';
 
-const ALL_TOOLS = [fileReadTool, fileWriteTool, shellExecTool, githubCreateFileTool, webSearchTool];
+const ALL_TOOLS = [
+  fileReadTool,
+  fileWriteTool,
+  shellExecTool,
+  githubCreateFileTool,
+  webSearchTool,
+  dbMigrateTool,
+  testRunTool,
+  deploymentDeployTool,
+];
 
 const toolRegistry: Record<AgentType, DynamicStructuredTool[]> = {
-  frontend: [fileReadTool, fileWriteTool, shellExecTool, webSearchTool],
-  backend:  [fileReadTool, fileWriteTool, shellExecTool, githubCreateFileTool, webSearchTool],
-  devops:   [fileReadTool, fileWriteTool, shellExecTool, githubCreateFileTool],
-  data:     [fileReadTool, fileWriteTool, webSearchTool],
-  security: [fileReadTool, shellExecTool],
-  geral:    [fileReadTool, fileWriteTool, shellExecTool, webSearchTool], // tools genéricas para agentes não especializados
+  frontend: [fileReadTool, fileWriteTool, shellExecTool, webSearchTool, testRunTool],
+  backend:  [fileReadTool, fileWriteTool, shellExecTool, githubCreateFileTool, webSearchTool, dbMigrateTool, testRunTool],
+  devops:   [fileReadTool, fileWriteTool, shellExecTool, githubCreateFileTool, dbMigrateTool, deploymentDeployTool],
+  data:     [fileReadTool, fileWriteTool, webSearchTool, dbMigrateTool],
+  security: [fileReadTool, shellExecTool, testRunTool],
+  geral:    [fileReadTool, fileWriteTool, shellExecTool, webSearchTool, testRunTool],
 };
 
 export function getToolsForAgent(agentType: AgentType): DynamicStructuredTool[] {
@@ -193,3 +204,4 @@ export function getToolByName(name: string): DynamicStructuredTool | undefined {
 }
 
 export { toolRegistry };
+export { dbMigrateTool, testRunTool, deploymentDeployTool };

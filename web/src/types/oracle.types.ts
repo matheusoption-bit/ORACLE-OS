@@ -16,6 +16,12 @@ export interface TaskMetrics {
   durationMs?: number;
   successRate?: number;
   tokensUsed?: number;
+  /** Tokens discriminados por agente (Sprint 9) */
+  tokensPlanner?: number;
+  tokensExecutor?: number;
+  tokensReviewer?: number;
+  /** Número de iterações do ciclo Reviewer (Sprint 9) */
+  iterationCount?: number;
   cost?: number;
 }
 
@@ -33,7 +39,7 @@ export type OracleEvent =
   | { type: 'subtask:started'; index: number; total: number; title: string }
   | { type: 'subtask:completed'; index: number; output: string }
   | { type: 'file:created'; path: string; content: string }
-  | { type: 'review:started'; attempt: number }
+  | { type: 'review:started'; attempt: number; iterationCount?: number }
   | { type: 'review:approved' }
   | { type: 'review:rejected'; feedback: string }
   | { type: 'skill:saved'; skillId: string }
