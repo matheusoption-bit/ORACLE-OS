@@ -1,22 +1,103 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+/**
+ * FileTree — Árvore de arquivos interativa do ORACLE-OS (Sprint 10)
+ *
+ * Evolução:
+ * - Clique em arquivo abre na aba Code (atualiza activeFile + activeTab)
+ * - Ícones por tipo de arquivo (TS, TSX, JS, CSS, JSON, MD, PY, etc.)
+ * - Estrutura hierárquica com pastas colapsáveis
+ * - Badge NEW com fade-out para arquivos recém-criados
+ * - Indicador de arquivo ativo com borda lateral
+ * - Suporte a busca/filtro de arquivos
+ */
+
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronRight, Folder, FolderOpen, FileCode2, File, Lock } from 'lucide-react';
+import {
+  ChevronRight,
+  Folder,
+  FolderOpen,
+  FileCode2,
+  FileJson,
+  FileText,
+  FileType,
+  File,
+  Lock,
+  Search,
+  X,
+} from 'lucide-react';
 import { useOracleStore, type FileEntry } from '@/stores/oracle.store';
 
-// ─── Ícone por extensão ────────────────────────────────────────────────────
+// ─── Mapeamento de ícones por extensão ────────────────────────────────────────
+
+interface FileIconConfig {
+  icon: typeof FileCode2;
+  color: string;
+  label: string;
+}
+
+const FILE_ICON_MAP: Record<string, FileIconConfig> = {
+  ts:    { icon: FileCode2, color: '#3b82f6', label: 'TypeScript' },
+  tsx:   { icon: FileCode2, color: '#3b82f6', label: 'React TSX' },
+  js:    { icon: FileCode2, color: '#f59e0b', label: 'JavaScript' },
+  jsx:   { icon: FileCode2, color: '#f59e0b', label: 'React JSX' },
+  css:   { icon: FileType,  color: '#ec4899', label: 'CSS' },
+  scss:  { icon: FileType,  color: '#ec4899', label: 'SCSS' },
+  json:  { icon: FileJson,  color: '#f59e0b', label: 'JSON' },
+  md:    { icon: FileText,  color: '#94a3b8', label: 'Markdown' },
+  html:  { icon: FileCode2, color: '#f97316', label: 'HTML' },
+  py:    { icon: FileCode2, color: '#3b82f6', label: 'Python' },
+  sh:    { icon: FileCode2, color: '#10b981', label: 'Shell' },
+  yml:   { icon: FileText,  color: '#10b981', label: 'YAML' },
+  yaml:  { icon: FileText,  color: '#10b981', label: 'YAML' },
+  svg:   { icon: FileType,  color: '#f97316', label: 'SVG' },
+  png:   { icon: FileType,  color: '#8b5cf6', label: 'PNG' },
+  jpg:   { icon: FileType,  color: '#8b5cf6', label: 'JPEG' },
+  env:   { icon: Lock,      color: '#ef4444', label: 'Environment' },
+  lock:  { icon: Lock,      color: '#6b7280', label: 'Lock File' },
+  test:  { icon: FileCode2, color: '#10b981', label: 'Test File' },
+  spec:  { icon: FileCode2, color: '#10b981', label: 'Spec File' },
+};
+
+function getFileIconConfig(path: string): FileIconConfig {
+  const name = path.split('/').pop() ?? '';
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+
+  // Detecta arquivos de teste
+  if (name.includes('.test.') || name.includes('.spec.')) {
+    return FILE_ICON_MAP['test'];
+  }
+
+  // Detecta .env*
+  if (name.startsWith('.env')) {
+    return FILE_ICON_MAP['env'];
+  }
+
+  // Detecta lock files
+  if (name.endsWith('-lock.json') || name === 'yarn.lock' || name === 'pnpm-lock.yaml') {
+    return FILE_ICON_MAP['lock'];
+  }
+
+  return FILE_ICON_MAP[ext] ?? { icon: File, color: 'rgba(255,255,255,0.4)', label: ext.toUpperCase() || 'File' };
+}
 
 function FileIcon({ path }: { path: string }) {
+  const config = getFileIconConfig(path);
+  const Icon = config.icon;
+  return <Icon size={13} style={{ color: config.color, flexShrink: 0 }} />;
+}
+
+// ─── Detecção de linguagem por extensão ──────────────────────────────────────
+
+function detectLanguage(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
-  const colorMap: Record<string, string> = {
-    ts: '#3b82f6', tsx: '#3b82f6', js: '#f59e0b', jsx: '#f59e0b',
-    css: '#ec4899', scss: '#ec4899',
-    json: '#f59e0b', md: '#94a3b8', html: '#f97316',
-    py: '#3b82f6', sh: '#10b981', yml: '#10b981', yaml: '#10b981',
+  const langMap: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact',
+    css: 'css', scss: 'scss', json: 'json', md: 'markdown', html: 'html',
+    py: 'python', sh: 'shell', yml: 'yaml', yaml: 'yaml', sql: 'sql',
   };
-  const color = colorMap[ext] ?? 'rgba(255,255,255,0.4)';
-  return <FileCode2 size={13} style={{ color, flexShrink: 0 }} />;
+  return langMap[ext] ?? 'plaintext';
 }
 
 // ─── Badge NEW com fade-out em 4s ─────────────────────────────────────────
@@ -44,33 +125,226 @@ function NewBadge({ addedAt }: { addedAt: string }) {
   );
 }
 
-// ─── Agrupa paths em estrutura de folder ──────────────────────────────────
+// ─── Estrutura de árvore hierárquica ─────────────────────────────────────────
 
-function buildTree(files: Record<string, FileEntry>): Record<string, string[]> {
-  const tree: Record<string, string[]> = { '/': [] };
-  Object.keys(files).forEach((path) => {
-    const parts = path.split('/');
-    if (parts.length === 1) {
-      tree['/'].push(path);
-    } else {
-      const folder = parts.slice(0, -1).join('/');
-      if (!tree[folder]) tree[folder] = [];
-      tree[folder].push(path);
-    }
-  });
-  return tree;
+interface TreeNode {
+  name: string;
+  path: string;
+  isFolder: boolean;
+  children: TreeNode[];
+  file?: FileEntry;
 }
 
-// ─── FileTree ─────────────────────────────────────────────────────────────
+function buildHierarchicalTree(files: Record<string, FileEntry>): TreeNode {
+  const root: TreeNode = { name: 'root', path: '', isFolder: true, children: [] };
+
+  const sortedPaths = Object.keys(files).sort();
+
+  for (const filePath of sortedPaths) {
+    const parts = filePath.split('/');
+    let current = root;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      const currentPath = parts.slice(0, i + 1).join('/');
+
+      if (isLast) {
+        // Arquivo
+        current.children.push({
+          name: part,
+          path: filePath,
+          isFolder: false,
+          children: [],
+          file: files[filePath],
+        });
+      } else {
+        // Pasta
+        let folder = current.children.find((c) => c.isFolder && c.name === part);
+        if (!folder) {
+          folder = { name: part, path: currentPath, isFolder: true, children: [] };
+          current.children.push(folder);
+        }
+        current = folder;
+      }
+    }
+  }
+
+  // Ordena: pastas primeiro, depois arquivos, ambos alfabeticamente
+  const sortChildren = (node: TreeNode) => {
+    node.children.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    node.children.forEach(sortChildren);
+  };
+  sortChildren(root);
+
+  return root;
+}
+
+// ─── Componente de nó da árvore ──────────────────────────────────────────────
+
+interface TreeNodeComponentProps {
+  node: TreeNode;
+  depth: number;
+  openFolders: Set<string>;
+  toggleFolder: (path: string) => void;
+  selectFile: (path: string) => void;
+  activeFile: string | null;
+  isLocked: boolean;
+  searchQuery: string;
+}
+
+function TreeNodeComponent({
+  node,
+  depth,
+  openFolders,
+  toggleFolder,
+  selectFile,
+  activeFile,
+  isLocked,
+  searchQuery,
+}: TreeNodeComponentProps) {
+  if (node.isFolder) {
+    const isOpen = openFolders.has(node.path);
+    const hasMatchingChildren = searchQuery
+      ? node.children.some((c) =>
+          c.isFolder
+            ? true // Mostra pastas sempre durante busca
+            : c.name.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+      : true;
+
+    if (searchQuery && !hasMatchingChildren) return null;
+
+    return (
+      <div>
+        <button
+          onClick={() => toggleFolder(node.path)}
+          className="w-full flex items-center gap-2 py-1 px-2 rounded-lg transition-colors"
+          style={{ paddingLeft: `${8 + depth * 16}px` }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--glass-2)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          <motion.div animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.15 }}>
+            <ChevronRight size={11} style={{ color: 'var(--text-muted)' }} />
+          </motion.div>
+          {isOpen ? (
+            <FolderOpen size={13} style={{ color: '#f59e0b' }} />
+          ) : (
+            <Folder size={13} style={{ color: '#f59e0b' }} />
+          )}
+          <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+            {node.name}
+          </span>
+          <span
+            className="text-[9px] font-mono ml-auto"
+            style={{ color: 'var(--text-muted)', opacity: 0.5 }}
+          >
+            {node.children.filter((c) => !c.isFolder).length}
+          </span>
+        </button>
+
+        <AnimatePresence>
+          {isOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              style={{ overflow: 'hidden' }}
+            >
+              {node.children.map((child) => (
+                <TreeNodeComponent
+                  key={child.path}
+                  node={child}
+                  depth={depth + 1}
+                  openFolders={openFolders}
+                  toggleFolder={toggleFolder}
+                  selectFile={selectFile}
+                  activeFile={activeFile}
+                  isLocked={isLocked}
+                  searchQuery={searchQuery}
+                />
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
+  // Arquivo
+  if (searchQuery && !node.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+    return null;
+  }
+
+  const isActive = activeFile === node.path;
+
+  return (
+    <motion.button
+      key={node.path}
+      initial={{ opacity: 0, x: -6 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.15 }}
+      onClick={() => selectFile(node.path)}
+      className="w-full flex items-center gap-2 py-1 px-2 rounded-lg text-left transition-colors"
+      style={{
+        paddingLeft: `${8 + depth * 16}px`,
+        background: isActive ? 'var(--glass-3)' : 'transparent',
+        borderLeft: isActive ? '2px solid rgba(124,58,237,0.6)' : '2px solid transparent',
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) e.currentTarget.style.background = 'var(--glass-2)';
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) e.currentTarget.style.background = 'transparent';
+      }}
+    >
+      <FileIcon path={node.path} />
+      <span
+        className="font-mono text-xs truncate flex-1"
+        style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)' }}
+      >
+        {node.name}
+      </span>
+      <AnimatePresence>
+        {node.file && <NewBadge addedAt={node.file.updatedAt} />}
+      </AnimatePresence>
+      {isLocked && isActive && <Lock size={9} style={{ color: '#a78bfa', flexShrink: 0 }} />}
+    </motion.button>
+  );
+}
+
+// ─── FileTree Principal ──────────────────────────────────────────────────────
 
 export function FileTree() {
   const { files, activeFile, taskStatus } = useOracleStore();
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+
   const fileCount = Object.keys(files).length;
   const isLocked = taskStatus === 'running' || taskStatus === 'planning';
 
-  const tree = buildTree(files);
-  const folders = Object.keys(tree).filter((f) => f !== '/').sort();
+  // Constrói árvore hierárquica
+  const tree = useMemo(() => buildHierarchicalTree(files), [files]);
+
+  // Auto-expande pastas quando novos arquivos são adicionados
+  useEffect(() => {
+    const newFolders = new Set(openFolders);
+    Object.keys(files).forEach((path) => {
+      const parts = path.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        newFolders.add(parts.slice(0, i).join('/'));
+      }
+    });
+    if (newFolders.size !== openFolders.size) {
+      setOpenFolders(newFolders);
+    }
+  }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleFolder = (folder: string) => {
     setOpenFolders((prev) => {
@@ -81,52 +355,20 @@ export function FileTree() {
   };
 
   const selectFile = (path: string) => {
-    useOracleStore.getState().setActiveFile(path);
-    useOracleStore.getState().setActiveTab('code' as never);
-  };
-
-  const renderFile = (path: string, indent: number = 0) => {
-    const file = files[path];
-    const isActive = activeFile === path;
-    const name = path.split('/').pop() ?? path;
-
-    return (
-      <motion.button
-        key={path}
-        initial={{ opacity: 0, x: -6 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.15 }}
-        onClick={() => selectFile(path)}
-        className="w-full flex items-center gap-2 py-1 px-2 rounded-lg text-left transition-colors"
-        style={{
-          paddingLeft: `${8 + indent * 12}px`,
-          background: isActive ? 'var(--glass-3)' : 'transparent',
-          borderLeft: isActive ? '2px solid rgba(124,58,237,0.6)' : '2px solid transparent',
-        }}
-        onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--glass-2)'; }}
-        onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
-      >
-        <FileIcon path={path} />
-        <span className="font-mono text-xs truncate flex-1" style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-          {name}
-        </span>
-        <AnimatePresence>
-          <NewBadge addedAt={file?.updatedAt ?? new Date().toISOString()} />
-        </AnimatePresence>
-        {isLocked && isActive && <Lock size={9} style={{ color: '#a78bfa', flexShrink: 0 }} />}
-      </motion.button>
-    );
+    const store = useOracleStore.getState();
+    store.setActiveFile(path);
+    store.setActiveTab('code' as never);
   };
 
   return (
     <div className="h-full overflow-y-auto" style={{ background: '#080808' }}>
       {/* Header */}
       <div
-        className="flex items-center justify-between px-3 py-2 sticky top-0"
+        className="flex items-center justify-between px-3 py-2 sticky top-0 z-10"
         style={{ background: '#080808', borderBottom: '1px solid var(--glass-border)' }}
       >
         <div className="flex items-center gap-2">
-          <span className="text-sm">📁</span>
+          <Folder size={14} style={{ color: '#f59e0b' }} />
           <span className="font-mono text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
             Arquivos
           </span>
@@ -139,7 +381,46 @@ export function FileTree() {
             </span>
           )}
         </div>
+        {fileCount > 0 && (
+          <button
+            onClick={() => setShowSearch(!showSearch)}
+            className="p-1 rounded-lg transition-colors"
+            style={{ color: showSearch ? '#a78bfa' : 'var(--text-muted)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--glass-2)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            {showSearch ? <X size={13} /> : <Search size={13} />}
+          </button>
+        )}
       </div>
+
+      {/* Barra de busca */}
+      <AnimatePresence>
+        {showSearch && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="px-3 pb-2"
+            style={{ borderBottom: '1px solid var(--glass-border)' }}
+          >
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar arquivo..."
+              autoFocus
+              className="w-full bg-transparent border-none outline-none text-xs font-mono py-1.5 px-2 rounded-lg"
+              style={{
+                background: 'var(--glass-2)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--glass-border)',
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Conteúdo */}
       <div className="p-2">
@@ -149,56 +430,19 @@ export function FileTree() {
             <p className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>Nenhum arquivo gerado</p>
           </div>
         ) : (
-          <>
-            {/* Arquivos na raiz */}
-            {tree['/']?.map((p) => renderFile(p, 0))}
-
-            {/* Pastas */}
-            {folders.map((folder) => {
-              const isOpen = openFolders.has(folder);
-              const folderFiles = tree[folder] ?? [];
-              const folderName = folder.split('/').pop() ?? folder;
-
-              return (
-                <div key={folder}>
-                  {/* Folder header */}
-                  <button
-                    onClick={() => toggleFolder(folder)}
-                    className="w-full flex items-center gap-2 py-1 px-2 rounded-lg transition-colors"
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--glass-2)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                  >
-                    <motion.div animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.15 }}>
-                      <ChevronRight size={11} style={{ color: 'var(--text-muted)' }} />
-                    </motion.div>
-                    {isOpen ? (
-                      <FolderOpen size={13} style={{ color: '#f59e0b' }} />
-                    ) : (
-                      <Folder size={13} style={{ color: '#f59e0b' }} />
-                    )}
-                    <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {folderName}
-                    </span>
-                  </button>
-
-                  {/* Arquivos da pasta */}
-                  <AnimatePresence>
-                    {isOpen && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.2 }}
-                        style={{ overflow: 'hidden' }}
-                      >
-                        {folderFiles.map((p) => renderFile(p, 1))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              );
-            })}
-          </>
+          tree.children.map((child) => (
+            <TreeNodeComponent
+              key={child.path}
+              node={child}
+              depth={0}
+              openFolders={openFolders}
+              toggleFolder={toggleFolder}
+              selectFile={selectFile}
+              activeFile={activeFile}
+              isLocked={isLocked}
+              searchQuery={searchQuery}
+            />
+          ))
         )}
       </div>
     </div>
