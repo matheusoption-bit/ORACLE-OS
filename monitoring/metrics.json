@@ -1,0 +1,218 @@
+[
+  {
+    "taskId": "df9fkg8dd",
+    "task": "Crie a landing page oficial do ORACLE-OS.\n\nORACLE-OS é um sistema operacional de agentes de IA autônomo, \nconstruído com LangGraph, que recebe uma task em linguagem natural, \nplaneja automaticamente os subtasks, executa com tools reais \n(arquivo, shell, GitHub), revisa o próprio trabalho em loop e \naprende com cada task executada via RAG Pipeline.\n\nA landing page deve ter:\n\nHERO:\n- Fundo dark (#0a0a0a) com gradiente sutil roxo/azul\n- Título grande: \"ORACLE-OS\" com efeito glow\n- Subtítulo: \"O agente autônomo que planeja, executa e aprende.\"\n- Campo de input central com placeholder \n  \"Digite uma task e veja a mágica acontecer...\"\n- Botão CTA: \"Experimentar agora →\" (roxo, com hover animado)\n- Badge discreto: \"Powered by Claude · Llama · Gemini\"\n\nSEÇÃO — Como funciona:\n4 cards horizontais com ícones e animação de entrada:\n1. 🧠 Planner — \"Decompõe sua task em subtasks precisos\"\n2. ⚙️ Executor — \"Executa com tools reais: arquivo, shell, GitHub\"\n3. 🔍 Reviewer — \"Valida e corrige em loop até aprovar\"\n4. 📚 RAG Memory — \"Aprende com cada task executada\"\n\nSEÇÃO — Stack:\nLogos/badges: LangGraph · TypeScript · ChromaDB · \nXenova Embeddings · Claude · Groq · Gemini\n\nSEÇÃO — Métricas (mockadas):\n- \"21 testes passando\"\n- \"6 sprints concluídos\"\n- \"100% local — sem vendor lock-in\"\n- \"3 agentes orquestrados\"\n\nFOOTER:\n- \"Construído em 1 dia por Matheus Petry\"\n- Link pro GitHub\n\nStack: HTML + Tailwind CDN + CSS animations puras.\nArquivo único: index.html\nSem frameworks, sem build step — abre direto no browser.\n",
+    "startedAt": "2026-03-06T03:02:42.849Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "claude-3-7-sonnet",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "u7eupl80e",
+    "task": "Crie a landing page oficial do ORACLE-OS.\n\nORACLE-OS é um sistema operacional de agentes de IA autônomo, \nconstruído com LangGraph, que recebe uma task em linguagem natural, \nplaneja automaticamente os subtasks, executa com tools reais \n(arquivo, shell, GitHub), revisa o próprio trabalho em loop e \naprende com cada task executada via RAG Pipeline.\n\nA landing page deve ter:\n\nHERO:\n- Fundo dark (#0a0a0a) com gradiente sutil roxo/azul\n- Título grande: \"ORACLE-OS\" com efeito glow\n- Subtítulo: \"O agente autônomo que planeja, executa e aprende.\"\n- Campo de input central com placeholder \n  \"Digite uma task e veja a mágica acontecer...\"\n- Botão CTA: \"Experimentar agora →\" (roxo, com hover animado)\n- Badge discreto: \"Powered by Claude · Llama · Gemini\"\n\nSEÇÃO — Como funciona:\n4 cards horizontais com ícones e animação de entrada:\n1. 🧠 Planner — \"Decompõe sua task em subtasks precisos\"\n2. ⚙️ Executor — \"Executa com tools reais: arquivo, shell, GitHub\"\n3. 🔍 Reviewer — \"Valida e corrige em loop até aprovar\"\n4. 📚 RAG Memory — \"Aprende com cada task executada\"\n\nSEÇÃO — Stack:\nLogos/badges: LangGraph · TypeScript · ChromaDB · \nXenova Embeddings · Claude · Groq · Gemini\n\nSEÇÃO — Métricas (mockadas):\n- \"21 testes passando\"\n- \"6 sprints concluídos\"\n- \"100% local — sem vendor lock-in\"\n- \"3 agentes orquestrados\"\n\nFOOTER:\n- \"Construído em 1 dia por Matheus Petry\"\n- Link pro GitHub\n\nStack: HTML + Tailwind CDN + CSS animations puras.\nArquivo único: index.html\nSem frameworks, sem build step — abre direto no browser.\n",
+    "startedAt": "2026-03-06T03:09:24.756Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "claude-3-7-sonnet",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "60xpvkait",
+    "task": "crie um hello world em python",
+    "startedAt": "2026-03-06T03:13:33.845Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "claude-3-7-sonnet",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "7nt0jn6c5",
+    "task": "teste",
+    "startedAt": "2026-03-06T03:14:52.046Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "claude-3-7-sonnet",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "613q3ft79",
+    "task": "crie um hello world em python",
+    "startedAt": "2026-03-06T03:15:50.523Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "claude-3-5-sonnet",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "pj0j96kil",
+    "task": "crie um hello world em python",
+    "startedAt": "2026-03-06T03:16:26.831Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "claude-3-5-sonnet",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "j5vb7dj9e",
+    "task": "crie um hello world em python",
+    "startedAt": "2026-03-06T03:17:49.101Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "claude-3-5-sonnet",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "zdgr2mncy",
+    "task": "crie um hello world em python",
+    "startedAt": "2026-03-06T03:18:26.580Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "llama-3.3-70b",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "zc2biltnm",
+    "task": "crie um hello world em python",
+    "startedAt": "2026-03-06T03:19:29.767Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "llama-3.3-70b",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "sky7c5hxr",
+    "task": "Crie a landing page oficial do ORACLE-OS.\n\nORACLE-OS é um sistema operacional de agentes de IA autônomo, \nconstruído com LangGraph, que recebe uma task em linguagem natural, \nplaneja automaticamente os subtasks, executa com tools reais \n(arquivo, shell, GitHub), revisa o próprio trabalho em loop e \naprende com cada task executada via RAG Pipeline.\n\nA landing page deve ter:\n\nHERO:\n- Fundo dark (#0a0a0a) com gradiente sutil roxo/azul\n- Título grande: \"ORACLE-OS\" com efeito glow\n- Subtítulo: \"O agente autônomo que planeja, executa e aprende.\"\n- Campo de input central com placeholder \n  \"Digite uma task e veja a mágica acontecer...\"\n- Botão CTA: \"Experimentar agora →\" (roxo, com hover animado)\n- Badge discreto: \"Powered by Claude · Llama · Gemini\"\n\nSEÇÃO — Como funciona:\n4 cards horizontais com ícones e animação de entrada:\n1. 🧠 Planner — \"Decompõe sua task em subtasks precisos\"\n2. ⚙️ Executor — \"Executa com tools reais: arquivo, shell, GitHub\"\n3. 🔍 Reviewer — \"Valida e corrige em loop até aprovar\"\n4. 📚 RAG Memory — \"Aprende com cada task executada\"\n\nSEÇÃO — Stack:\nLogos/badges: LangGraph · TypeScript · ChromaDB · \nXenova Embeddings · Claude · Groq · Gemini\n\nSEÇÃO — Métricas (mockadas):\n- \"21 testes passando\"\n- \"6 sprints concluídos\"\n- \"100% local — sem vendor lock-in\"\n- \"3 agentes orquestrados\"\n\nFOOTER:\n- \"Construído em 1 dia por Matheus Petry\"\n- Link pro GitHub\n\nStack: HTML + Tailwind CDN + CSS animations puras.\nArquivo único: index.html\nSem frameworks, sem build step — abre direto no browser.\n",
+    "startedAt": "2026-03-06T03:22:48.860Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "llama-3.3-70b",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "qqonwvuj6",
+    "task": "Crie a landing page oficial do ORACLE-OS.\n\nORACLE-OS é um sistema operacional de agentes de IA autônomo, \nconstruído com LangGraph, que recebe uma task em linguagem natural, \nplaneja automaticamente os subtasks, executa com tools reais \n(arquivo, shell, GitHub), revisa o próprio trabalho em loop e \naprende com cada task executada via RAG Pipeline.\n\nA landing page deve ter:\n\nHERO:\n- Fundo dark (#0a0a0a) com gradiente sutil roxo/azul\n- Título grande: \"ORACLE-OS\" com efeito glow\n- Subtítulo: \"O agente autônomo que planeja, executa e aprende.\"\n- Campo de input central com placeholder \n  \"Digite uma task e veja a mágica acontecer...\"\n- Botão CTA: \"Experimentar agora →\" (roxo, com hover animado)\n- Badge discreto: \"Powered by Claude · Llama · Gemini\"\n\nSEÇÃO — Como funciona:\n4 cards horizontais com ícones e animação de entrada:\n1. 🧠 Planner — \"Decompõe sua task em subtasks precisos\"\n2. ⚙️ Executor — \"Executa com tools reais: arquivo, shell, GitHub\"\n3. 🔍 Reviewer — \"Valida e corrige em loop até aprovar\"\n4. 📚 RAG Memory — \"Aprende com cada task executada\"\n\nSEÇÃO — Stack:\nLogos/badges: LangGraph · TypeScript · ChromaDB · \nXenova Embeddings · Claude · Groq · Gemini\n\nSEÇÃO — Métricas (mockadas):\n- \"21 testes passando\"\n- \"6 sprints concluídos\"\n- \"100% local — sem vendor lock-in\"\n- \"3 agentes orquestrados\"\n\nFOOTER:\n- \"Construído em 1 dia por Matheus Petry\"\n- Link pro GitHub\n\nStack: HTML + Tailwind CDN + CSS animations puras.\nArquivo único: index.html\nSem frameworks, sem build step — abre direto no browser.\n",
+    "startedAt": "2026-03-06T03:27:26.296Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "llama-3.3-70b",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  },
+  {
+    "taskId": "pjzn6ws9n",
+    "task": "Crie a landing page oficial do ORACLE-OS.\n\nORACLE-OS é um sistema operacional de agentes de IA autônomo, \nconstruído com LangGraph, que recebe uma task em linguagem natural, \nplaneja automaticamente os subtasks, executa com tools reais \n(arquivo, shell, GitHub), revisa o próprio trabalho em loop e \naprende com cada task executada via RAG Pipeline.\n\nA landing page deve ter:\n\nHERO:\n- Fundo dark (#0a0a0a) com gradiente sutil roxo/azul\n- Título grande: \"ORACLE-OS\" com efeito glow\n- Subtítulo: \"O agente autônomo que planeja, executa e aprende.\"\n- Campo de input central com placeholder \n  \"Digite uma task e veja a mágica acontecer...\"\n- Botão CTA: \"Experimentar agora →\" (roxo, com hover animado)\n- Badge discreto: \"Powered by Claude · Llama · Gemini\"\n\nSEÇÃO — Como funciona:\n4 cards horizontais com ícones e animação de entrada:\n1. 🧠 Planner — \"Decompõe sua task em subtasks precisos\"\n2. ⚙️ Executor — \"Executa com tools reais: arquivo, shell, GitHub\"\n3. 🔍 Reviewer — \"Valida e corrige em loop até aprovar\"\n4. 📚 RAG Memory — \"Aprende com cada task executada\"\n\nSEÇÃO — Stack:\nLogos/badges: LangGraph · TypeScript · ChromaDB · \nXenova Embeddings · Claude · Groq · Gemini\n\nSEÇÃO — Métricas (mockadas):\n- \"21 testes passando\"\n- \"6 sprints concluídos\"\n- \"100% local — sem vendor lock-in\"\n- \"3 agentes orquestrados\"\n\nFOOTER:\n- \"Construído em 1 dia por Matheus Petry\"\n- Link pro GitHub\n\nStack: HTML + Tailwind CDN + CSS animations puras.\nArquivo único: index.html\nSem frameworks, sem build step — abre direto no browser.\n",
+    "startedAt": "2026-03-06T03:31:24.353Z",
+    "status": "running",
+    "reviewStatus": "pending",
+    "iterationCount": 0,
+    "modelsUsed": {
+      "planner": "llama-3.3-70b",
+      "executor": "llama-3.3-70b",
+      "reviewer": "gemini-2.0-flash"
+    },
+    "subtasksTotal": 0,
+    "subtasksCompleted": 0,
+    "errorsCount": 0,
+    "skillsRetrieved": 0,
+    "skillSaved": false
+  }
+]

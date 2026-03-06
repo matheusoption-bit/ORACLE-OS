@@ -28,10 +28,10 @@ export interface ModelOption {
 export const MODEL_CATALOG: ModelOption[] = [
   // ── Anthropic ──────────────────────────────────────────────────────────────
   {
-    id: 'claude-3-7-sonnet',
+    id: 'claude-3-5-sonnet',
     provider: 'anthropic',
-    modelName: 'claude-3-7-sonnet-20250219',
-    label: 'Claude 3.7 Sonnet',
+    modelName: 'claude-3-5-sonnet-20241022',
+    label: 'Claude 3.5 Sonnet',
     contextWindow: 200000,
     costPer1kTokens: 0.003,
     tier: 'paid',
@@ -178,7 +178,7 @@ export function getModelById(id: string): ModelOption | undefined {
 
 // Default models por papel
 export const DEFAULT_MODELS = {
-  planner: 'claude-3-7-sonnet',   // melhor raciocínio
+  planner: 'llama-3.3-70b',       // fallback devido à restrição do anthropic
   executor: 'llama-3.3-70b',      // rápido e gratuito
   reviewer: 'gemini-2.0-flash',   // gratuito e capaz
   fallback: 'llama-3.3-70b',      // se nenhum funcionar
