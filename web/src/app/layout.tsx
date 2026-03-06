@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'ORACLE-OS',
-  description: 'Agentic Dev Workspace',
+  title: 'ORACLE-OS · Autonomous Agent',
+  description: 'Agente autônomo de desenvolvimento: planeja, executa, revisa e aprende.',
+  keywords: ['ORACLE-OS', 'AI', 'agente autônomo', 'desenvolvimento', 'LangGraph'],
 };
 
 export default function RootLayout({

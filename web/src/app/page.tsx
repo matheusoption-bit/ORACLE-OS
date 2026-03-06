@@ -1,136 +1,172 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Sparkles, LayoutPanelLeft, Code2, PenTool, Database, Search } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
+import { Sparkles, Clock } from 'lucide-react';
+import { HeroTitle } from '@/components/home/HeroTitle';
+import { HeroPrompt } from '@/components/home/HeroPrompt';
+import { ModeSelector } from '@/components/home/ModeSelector';
+import { ModelSelector } from '@/components/home/ModelSelector';
+import type { RecentTask } from '@/types/oracle.types';
+
+// Tasks mock para sidebar
+const MOCK_TASKS: RecentTask[] = [
+  { id: '1', title: 'Dashboard de analytics com recharts', status: 'completed', createdAt: new Date().toISOString(), mode: 'dashboard' },
+  { id: '2', title: 'Sistema de autenticação JWT', status: 'executing', createdAt: new Date().toISOString(), mode: 'app' },
+  { id: '3', title: 'Landing page SaaS responsiva', status: 'completed', createdAt: new Date().toISOString(), mode: 'website' },
+  { id: '4', title: 'Refatoração do módulo de pagamentos', status: 'completed', createdAt: new Date().toISOString(), mode: 'fix' },
+];
+
+const STATUS_INDICATOR: Record<string, string> = {
+  completed: '#10b981',
+  executing: '#7c3aed',
+  planning:  '#3b82f6',
+  failed:    '#ef4444',
+  pending:   '#6b7280',
+  reviewing: '#f59e0b',
+};
 
 export default function Home() {
   const router = useRouter();
-  const [prompt, setPrompt] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading'>('idle');
-  const [mode, setMode] = useState('Desenvolver app');
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedMode, setSelectedMode] = useState('app');
+  const [selectedModel, setSelectedModel] = useState('claude-3-5-sonnet');
 
-  const modes = [
-    { label: 'Criar site', icon: <LayoutPanelLeft size={16} /> },
-    { label: 'Criar dashboard', icon: <Database size={16} /> },
-    { label: 'Desenvolver app', icon: <Code2 size={16} /> },
-    { label: 'Gerar docs', icon: <PenTool size={16} /> },
-    { label: 'Analisar código', icon: <Search size={16} /> }
-  ];
-
-  const handleSubmit = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!prompt.trim() || status === 'loading') return;
-
-    setStatus('loading');
-    
+  const handleSubmit = useCallback(async (prompt: string) => {
+    setIsLoading(true);
     try {
       const res = await fetch('/api/proxy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, mode })
+        body: JSON.stringify({ prompt, mode: selectedMode, model: selectedModel }),
       });
-      
       const data = await res.json();
-      
       if (data.taskId) {
-        // Redireciona pro workspace do LangGraph
         router.push(`/workspace/${data.taskId}`);
       } else {
-        alert(data.error || 'Erro ao iniciar task');
-        setStatus('idle');
+        console.error(data.error || 'Erro ao iniciar task');
+        setIsLoading(false);
       }
-    } catch(e) {
+    } catch (e) {
       console.error(e);
-      setStatus('idle');
+      setIsLoading(false);
     }
-  };
+  }, [selectedMode, selectedModel, router]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#0a0a0a] text-white">
-      {/* Sidebar História das Tasks */}
-      <aside className="w-64 border-r border-[#1f1f1f] bg-[#111] p-4 hidden md:flex flex-col">
-        <h2 className="text-sm font-semibold mb-6 flex items-center text-zinc-400">
-          <Sparkles size={16} className="mr-2" />
-          ORACLE-OS
-        </h2>
-        
-        <div className="text-xs text-zinc-500 font-medium mb-3">HOJE</div>
-        <div className="space-y-1">
-          {/* Skeleton/Mock list */}
-          <button className="w-full text-left truncate text-sm hover:bg-[#1a1a1a] p-2 rounded text-zinc-300">
-            ✅ Criar componente de table
-          </button>
-          <button className="w-full text-left truncate text-sm hover:bg-[#1a1a1a] p-2 rounded text-zinc-300">
-             Sistema de login (em progresso)
-          </button>
+    <div
+      className="flex h-screen overflow-hidden"
+      style={{ background: '#080808', color: 'var(--text-primary)' }}
+    >
+      {/* Aurora background */}
+      <div className="aurora-bg" aria-hidden="true" />
+
+      {/* Sidebar glass */}
+      <aside
+        className="hidden lg:flex flex-col w-64 shrink-0 relative z-10"
+        style={{
+          background: 'var(--glass-1)',
+          backdropFilter: 'blur(var(--blur-md))',
+          borderRight: '1px solid var(--glass-border)',
+        }}
+      >
+        {/* Logo */}
+        <div
+          className="flex items-center gap-2 px-5 py-5"
+          style={{ borderBottom: '1px solid var(--glass-border)' }}
+        >
+          <div
+            className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.3)' }}
+          >
+            <Sparkles size={14} style={{ color: '#a78bfa' }} />
+          </div>
+          <span className="font-semibold text-sm tracking-wide" style={{ color: 'var(--text-primary)' }}>
+            ORACLE-OS
+          </span>
+        </div>
+
+        {/* Tasks recentes */}
+        <div className="flex-1 overflow-y-auto px-3 py-4">
+          <div
+            className="flex items-center gap-1.5 px-2 mb-3 text-xs font-mono uppercase tracking-widest"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <Clock size={10} />
+            <span>Recentes</span>
+          </div>
+
+          <div className="space-y-1">
+            {MOCK_TASKS.map((task) => (
+              <motion.button
+                key={task.id}
+                whileHover={{ backgroundColor: 'rgba(255,255,255,0.05)', x: 2 }}
+                className="w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition-all duration-150"
+              >
+                {/* Status dot */}
+                <span
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{ background: STATUS_INDICATOR[task.status] ?? '#6b7280' }}
+                />
+                <span
+                  className="text-sm truncate"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  {task.title}
+                </span>
+              </motion.button>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer sidebar */}
+        <div
+          className="px-4 py-4"
+          style={{ borderTop: '1px solid var(--glass-border)' }}
+        >
+          <div className="glass rounded-xl px-3 py-2 text-center">
+            <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+              Sprint 7.1 · Alpha
+            </span>
+          </div>
         </div>
       </aside>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col items-center justify-center p-6 relative">
-        <div className="max-w-3xl w-full">
-          
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="text-center mb-8"
-          >
-            <h1 className="text-4xl md:text-5xl font-semibold mb-3 tracking-tight">O que posso fazer por você?</h1>
-            <p className="text-zinc-500">O ORACLE-OS pensa, planeja e implementa o código.</p>
-          </motion.div>
-
-          <form onSubmit={handleSubmit} className="relative mb-6">
-            <textarea
-              className="w-full bg-[#111] border border-[#2a2a2a] rounded-2xl p-6 text-lg focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 resize-none min-h-[160px] shadow-2xl transition"
-              placeholder="Ex: Crie um aplicativo de dashboard moderno com tailwind e recharts..."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit();
-                }
-              }}
-            />
-            
-            <div className="absolute bottom-4 right-4 flex gap-2">
-              <button
-                type="submit"
-                disabled={!prompt.trim() || status === 'loading'}
-                className="bg-white text-black px-6 py-2 rounded-xl font-medium flex items-center gap-2 hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-              >
-                {status === 'loading' ? (
-                  <span className="w-4 h-4 rounded-full border-2 border-black border-t-transparent animate-spin" />
-                ) : (
-                  'Enviar'
-                )}
-              </button>
-            </div>
-          </form>
-
-          {/* Mode Selectors */}
-          <div className="flex flex-wrap gap-3 justify-center">
-            {modes.map((m) => (
-              <button
-                key={m.label}
-                type="button"
-                onClick={() => setMode(m.label)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm border transition-all ${
-                  mode === m.label 
-                    ? 'bg-blue-500/10 border-blue-500/30 text-blue-400' 
-                    : 'bg-[#111] border-[#1f1f1f] text-zinc-400 hover:border-zinc-700 hover:text-white'
-                }`}
-              >
-                {m.icon}
-                {m.label}
-              </button>
-            ))}
+      {/* Main area */}
+      <div className="flex-1 flex flex-col relative z-10 min-w-0">
+        {/* Header */}
+        <header
+          className="flex items-center justify-between px-6 py-4 shrink-0"
+          style={{ borderBottom: '1px solid var(--glass-border)' }}
+        >
+          {/* Logo mobile */}
+          <div className="flex items-center gap-2 lg:hidden">
+            <Sparkles size={16} style={{ color: '#a78bfa' }} />
+            <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+              ORACLE-OS
+            </span>
           </div>
+          <div className="hidden lg:block" />
 
-        </div>
-      </main>
+          {/* Model Selector */}
+          <ModelSelector selected={selectedModel} onSelect={setSelectedModel} />
+        </header>
+
+        {/* Content centralizado */}
+        <main className="flex-1 flex flex-col items-center justify-center px-6 py-8 overflow-y-auto">
+          <div className="w-full max-w-2xl mx-auto">
+            {/* Hero */}
+            <HeroTitle />
+
+            {/* Prompt Input */}
+            <HeroPrompt onSubmit={handleSubmit} isLoading={isLoading} />
+
+            {/* Mode Selector */}
+            <ModeSelector selected={selectedMode} onSelect={setSelectedMode} />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
