@@ -123,22 +123,28 @@ Retorne o Execution Blueprint JSON completo.`;
   try {
     const result = await structuredModel.invoke([new HumanMessage(userPrompt)]);
 
-    let finalStatus = result.status;
-    let feedbackToAnalyst = result.feedbackToAnalyst;
+    const rawStatus = (result as any).status ?? (result as any).reviewStatus ?? 'needs_revision';
+    let finalStatus = rawStatus as ExecutionBlueprint['status'];
+    let feedbackToAnalyst = (result as any).feedbackToAnalyst;
+    let revisionNotes = (result as any).revisionNotes ?? (result as any).architecturalNotes ?? '';
+    const securityRisks = Array.isArray((result as any).securityRisks) ? (result as any).securityRisks : [];
+    const redundanciesFound = Array.isArray((result as any).redundanciesFound) ? (result as any).redundanciesFound : [];
 
     // Guard: se rejeita ou pede revisão mas já atingiu limite, forçar aprovação
     if ((finalStatus === 'rejected' || finalStatus === 'needs_revision') && iteration >= maxIterations) {
       reviewerLogger.warn(`⚠️  [Reviewer] Limite de iterações atingido. Forçando aprovação com warnings.`);
       finalStatus = 'approved';
-      feedbackToAnalyst = `[FORCED APPROVAL] Limite de ${maxIterations} iterações atingido. Último feedback: ${feedbackToAnalyst || 'Nenhum'}`;
+      feedbackToAnalyst = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] ${feedbackToAnalyst ?? ''}`.trim();
+      revisionNotes = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] ${revisionNotes ?? ''}`.trim();
     }
 
     // Mapear subtasks com retrocompatibilidade
-    const subtasks: Subtask[] = (result.subtasks || []).map((s) => ({
+    const subtasks: Subtask[] = ((result as any).subtasks || []).map((s: any) => ({
       ...s,
-      dependencies: s.dependsOn,
+      dependencies: s.dependencies ?? s.dependsOn ?? [],
+      dependsOn: s.dependsOn ?? [],
       assignedAgent: ['frontend', 'backend', 'devops', 'data', 'security'].includes(s.assignedAgent)
-        ? s.assignedAgent as Subtask['assignedAgent']
+        ? (s.assignedAgent as Subtask['assignedAgent'])
         : 'geral',
     }));
 
@@ -148,10 +154,10 @@ Retorne o Execution Blueprint JSON completo.`;
     const blueprint: ExecutionBlueprint = {
       status: finalStatus,
       subtasks: limitedSubtasks,
-      executionPlan: result.executionPlan,
-      architecturalNotes: result.architecturalNotes,
-      securityRisks: result.securityRisks,
-      redundanciesFound: result.redundanciesFound,
+      executionPlan: (result as any).executionPlan ?? 'sequential',
+      architecturalNotes: revisionNotes,
+      securityRisks,
+      redundanciesFound,
       feedbackToAnalyst,
       timestamp: new Date().toISOString(),
     };
@@ -177,8 +183,8 @@ Retorne o Execution Blueprint JSON completo.`;
     // Memória de curto prazo
     const memoryEntry = `[Reviewer] Tentativa ${iteration}/${maxIterations} → ${finalStatus}. ` +
       `Subtasks: ${limitedSubtasks.length}. ` +
-      `Riscos de segurança: ${result.securityRisks.length}. ` +
-      `Redundâncias: ${result.redundanciesFound.length}.` +
+      `Riscos de segurança: ${securityRisks.length}. ` +
+      `Redundâncias: ${redundanciesFound.length}.` +
       (feedbackToAnalyst ? ` Feedback: ${feedbackToAnalyst.substring(0, 150)}` : '');
 
     return {
@@ -187,7 +193,7 @@ Retorne o Execution Blueprint JSON completo.`;
       currentSubtask: 0,
       currentStage: nextStage,
       reviewStatus,
-      revisionNotes: result.architecturalNotes,
+      revisionNotes,
       iterationCount: iteration,
       shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
     };
@@ -241,7 +247,7 @@ function buildForceApproveResult(state: OracleState): Partial<OracleState> {
     status: 'approved',
     subtasks,
     executionPlan: 'sequential',
-    architecturalNotes: '[AUTO-APROVADO] Limite de iterações atingido. Prosseguindo com blueprint mínimo.',
+    architecturalNotes: '[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] Limite de iterações atingido. Prosseguindo com blueprint mínimo.',
     securityRisks: [],
     redundanciesFound: [],
     feedbackToAnalyst: undefined,
@@ -256,7 +262,7 @@ function buildForceApproveResult(state: OracleState): Partial<OracleState> {
     currentSubtask: 0,
     currentStage: 'executor',
     reviewStatus: 'approved',
-    revisionNotes: '[AUTO-APROVADO] Limite de iterações atingido.',
+    revisionNotes: '[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] Limite de iterações atingido.',
     iterationCount: state.iterationCount + 1,
     shortTermMemory: [...(state.shortTermMemory ?? []), memoryEntry],
   };

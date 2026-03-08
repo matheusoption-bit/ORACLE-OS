@@ -1,5 +1,5 @@
 import { PROMPT_ENHANCER_SYSTEM, ENHANCEMENT_EXAMPLES } from './enhancer.prompt.js';
-import { createModel } from '../models/model-registry.js';
+import { createModel, DEFAULT_MODELS } from '../models/model-registry.js';
 import { config } from '../config.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { z } from 'zod';
@@ -21,8 +21,13 @@ export class PromptEnhancer {
     projectStack?: string[];
     recentTasks?: string[];
   }): Promise<EnhancedPrompt> {
+    const analystConfig = config?.agents?.analyst ?? config?.agents?.planner ?? {
+      modelId: DEFAULT_MODELS.planner,
+      temperature: 0.3,
+    };
+
     const model = createModel({
-      modelId: config.agents.analyst.modelId, // Use the analyst model for reasoning
+      modelId: analystConfig.modelId, // Use the analyst model for reasoning (fallback to planner)
       temperature: 0.2, // Low temperature for consistent output
     });
 

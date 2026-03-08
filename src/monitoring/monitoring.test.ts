@@ -61,7 +61,8 @@ describe('Monitoring & Observability', () => {
       testLog.error('Mensagem de Erro');
 
       expect(spyConsole).toHaveBeenCalledTimes(2);
-      expect(spyAppend).toHaveBeenCalledTimes(2);
+      // Cada log é escrito em oracle.log e oracle.jsonl
+      expect(spyAppend).toHaveBeenCalledTimes(4);
       
       spyConsole.mockRestore();
       spyAppend.mockRestore();
