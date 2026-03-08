@@ -1,11 +1,35 @@
 /**
  * ORACLE-OS Planner Agent — Testes Unitários (Sprint 2)
+ *
+ * @deprecated These tests are for the deprecated Planner agent.
+ * The Planner has been replaced by Analyst in the Quadripartite Architecture.
+ * Tests now validate backward compatibility layer that delegates to analystNode.
+ *
  * Usa mock do LLM para não consumir API real
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { PlanSchema, SubtaskSchema } from './planner.js';
+
+// Define schemas locally since they're no longer exported from planner.js
+const SubtaskSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  type: z.enum(['code', 'file', 'search', 'review', 'other']),
+  priority: z.number().min(1).max(5),
+  dependsOn: z.array(z.string()).default([]),
+  assignedAgent: z.enum(['frontend', 'backend', 'devops', 'data', 'security', 'geral']).default('geral'),
+  dependencies: z.array(z.string()).default([]),
+  estimatedDuration: z.number().default(15),
+  tools: z.array(z.string()).default([]),
+  validationCriteria: z.string().default(''),
+});
+
+const PlanSchema = z.object({
+  subtasks: z.array(SubtaskSchema),
+  executionPlan: z.enum(['sequential', 'parallel', 'mixed']).default('sequential'),
+});
 
 // ─── Mock do model-registry ───────────────────────────────────────────────────
 // Intercepta createModel e retorna um LLM falso com resposta controlada
@@ -14,10 +38,29 @@ vi.mock('../models/model-registry.js', () => ({
   createModel: vi.fn(),
 }));
 
+vi.mock('../rag/rag-pipeline.js', () => ({
+  retrieveRelevantSkills: vi.fn().mockResolvedValue([]),
+  formatSkillsAsContext: vi.fn().mockReturnValue('No skills available'),
+}));
+
+vi.mock('../prompts/enhancer.js', () => ({
+  PromptEnhancer: vi.fn().mockImplementation(() => ({
+    enhance: vi.fn().mockResolvedValue({
+      originalPrompt: 'test',
+      enhancedPrompt: 'test enhanced',
+      complexity: 'medium',
+      estimatedSubtasks: 3,
+      estimatedTokens: 1000,
+      suggestedMode: 'standard',
+    }),
+  })),
+}));
+
 vi.mock('../config.js', () => ({
   config: {
     agents: {
-      planner: { modelId: 'claude-3-7-sonnet', temperature: 0.7 },
+      analyst: { modelId: 'claude-3-5-sonnet', temperature: 0.5 },
+      planner: { modelId: 'claude-3-5-sonnet', temperature: 0.7 },
     },
   },
 }));
@@ -76,97 +119,85 @@ describe('plannerAgent', () => {
       buildMockSubtask({ id: 'BE-003', title: 'Escrever testes unitários', type: 'code', priority: 2, dependsOn: ['BE-002'], dependencies: ['BE-002'] }),
     ];
 
-    const mockPlan = buildMockPlan('Create a REST API endpoint', mockSubtasks);
-    vi.mocked(createModel).mockReturnValue(createMockLLM(mockPlan) as never);
+    // Mock the Analyst node output (which planner delegates to)
+    vi.mocked(createModel).mockReturnValue({
+      withStructuredOutput: vi.fn().mockReturnValue({
+        invoke: vi.fn().mockResolvedValue({
+          taskSummary: 'Create REST API endpoint',
+          requirements: ['Define validation schema', 'Implement POST route', 'Write unit tests'],
+          relevantFiles: [],
+          complexityLevel: 'medium',
+          externalDependencies: [],
+          initialRisks: [],
+        }),
+      }),
+    } as never);
 
     const state = {
       task: 'Create a REST API endpoint',
+      contextDocument: null,
+      executionBlueprint: null,
+      executedCode: null,
+      synthesisOutput: null,
+      currentStage: 'analyst' as const,
       subtasks: [],
       currentSubtask: 0,
       results: {},
       errors: [],
       reviewStatus: 'pending' as const,
+      revisionNotes: undefined,
       iterationCount: 0,
+      shortTermMemory: [],
     };
 
     const result = await plannerAgent(state);
 
-    // Deve retornar subtasks
-    expect(result.subtasks).toBeDefined();
-    expect(result.subtasks!.length).toBeGreaterThan(0);
-
-    // Cada subtask deve ter os campos do Sprint 2
-    for (const subtask of result.subtasks!) {
-      const parsed = SubtaskSchema.safeParse(subtask);
-      expect(parsed.success).toBe(true);
-    }
-
-    // Prioridade dentro do range 1-5
-    for (const subtask of result.subtasks!) {
-      expect(subtask.priority).toBeGreaterThanOrEqual(1);
-      expect(subtask.priority).toBeLessThanOrEqual(5);
-    }
+    // Planner now delegates to Analyst, which returns contextDocument instead of subtasks
+    // The subtasks are created by Reviewer in the Quadripartite architecture
+    expect(result.contextDocument).toBeDefined();
+    expect(result.contextDocument?.requirements).toBeDefined();
+    expect(result.contextDocument?.requirements.length).toBeGreaterThan(0);
   });
 
   it('decompõe "Fix bug in authentication" em subtasks válidas', async () => {
     const { createModel } = await import('../models/model-registry.js');
     const { plannerAgent } = await import('./planner.js');
 
-    const mockSubtasks = [
-      buildMockSubtask({
-        id: 'SEC-001',
-        title: 'Reproduzir o bug de autenticação',
-        type: 'search',
-        priority: 1,
-        assignedAgent: 'backend',
+    vi.mocked(createModel).mockReturnValue({
+      withStructuredOutput: vi.fn().mockReturnValue({
+        invoke: vi.fn().mockResolvedValue({
+          taskSummary: 'Fix authentication bug',
+          requirements: ['Reproduce bug', 'Fix JWT refresh logic', 'Code review'],
+          relevantFiles: ['auth.ts', 'jwt.ts'],
+          complexityLevel: 'medium',
+          externalDependencies: [],
+          initialRisks: ['Security vulnerability'],
+        }),
       }),
-      buildMockSubtask({
-        id: 'SEC-002',
-        title: 'Corrigir lógica de refresh do token JWT',
-        type: 'code',
-        priority: 1,
-        dependsOn: ['SEC-001'],
-        dependencies: ['SEC-001'],
-        assignedAgent: 'backend',
-      }),
-      buildMockSubtask({
-        id: 'SEC-003',
-        title: 'Code review da correção',
-        type: 'review',
-        priority: 2,
-        dependsOn: ['SEC-002'],
-        dependencies: ['SEC-002'],
-        assignedAgent: 'security',
-      }),
-    ];
-
-    const mockPlan = buildMockPlan('Fix bug in authentication', mockSubtasks);
-    vi.mocked(createModel).mockReturnValue(createMockLLM(mockPlan) as never);
+    } as never);
 
     const state = {
       task: 'Fix bug in authentication',
+      contextDocument: null,
+      executionBlueprint: null,
+      executedCode: null,
+      synthesisOutput: null,
+      currentStage: 'analyst' as const,
       subtasks: [],
       currentSubtask: 0,
       results: {},
       errors: [],
       reviewStatus: 'pending' as const,
+      revisionNotes: undefined,
       iterationCount: 0,
+      shortTermMemory: [],
     };
 
     const result = await plannerAgent(state);
 
-    expect(result.subtasks).toBeDefined();
-    expect(result.subtasks!.length).toBeGreaterThan(0);
-
-    // Deve conter pelo menos um subtask de review
-    const hasReview = result.subtasks!.some((s) => s.type === 'review');
-    expect(hasReview).toBe(true);
-
-    // Todos os subtasks devem ser válidos pelo Zod
-    for (const subtask of result.subtasks!) {
-      const parsed = SubtaskSchema.safeParse(subtask);
-      expect(parsed.success).toBe(true);
-    }
+    expect(result.contextDocument).toBeDefined();
+    expect(result.contextDocument?.requirements).toBeDefined();
+    expect(result.contextDocument?.initialRisks).toContain('Security vulnerability');
   });
 
   it('valida que o SubtaskSchema rejeita dados inválidos (priority fora do range)', () => {
@@ -198,20 +229,38 @@ describe('plannerAgent', () => {
     const { createModel } = await import('../models/model-registry.js');
     const { plannerAgent } = await import('./planner.js');
 
-    const mockPlan = buildMockPlan('Simple task', [buildMockSubtask()]);
-    vi.mocked(createModel).mockReturnValue(createMockLLM(mockPlan) as never);
+    vi.mocked(createModel).mockReturnValue({
+      withStructuredOutput: vi.fn().mockReturnValue({
+        invoke: vi.fn().mockResolvedValue({
+          taskSummary: 'Simple task',
+          requirements: ['Do something simple'],
+          relevantFiles: [],
+          complexityLevel: 'low',
+          externalDependencies: [],
+          initialRisks: [],
+        }),
+      }),
+    } as never);
 
     const state = {
       task: 'Simple task',
+      contextDocument: null,
+      executionBlueprint: null,
+      executedCode: null,
+      synthesisOutput: null,
+      currentStage: 'analyst' as const,
       subtasks: [],
       currentSubtask: 5, // estava em execução anterior
       results: {},
       errors: [],
       reviewStatus: 'pending' as const,
+      revisionNotes: undefined,
       iterationCount: 0,
+      shortTermMemory: [],
     };
 
     const result = await plannerAgent(state);
-    expect(result.currentSubtask).toBe(0);
+    // Analyst node doesn't reset currentSubtask, but it transitions to reviewer stage
+    expect(result.currentStage).toBe('reviewer');
   });
 });
