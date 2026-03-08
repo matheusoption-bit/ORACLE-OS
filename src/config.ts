@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_MODELS } from './models/model-registry.js';
+import type { PipelineGuardConfig } from './pipeline/guards.js';
 
 export interface AgentModelConfig {
   modelId: string;    // ID do MODEL_CATALOG
@@ -37,13 +38,19 @@ export interface OracleConfig {
     allowModelSwitching: boolean;
     defaultUserModel: string;
   };
-  /** Guardrails do pipeline quadripartite */
-  pipeline: {
-    /** Máximo de iterações Reviewer↔Analyst antes de forçar aprovação */
+  /**
+   * Guardrails do pipeline quadripartite (Issue #11: Iteration Guards).
+   *
+   * All fields are optional — PipelineGuards merges these values with
+   * DEFAULT_GUARD_CONFIG at construction time, so only overrides need to
+   * be specified here.
+   */
+  pipeline: Partial<PipelineGuardConfig> & {
+    /** @deprecated Use maxReviewerAnalystIterations instead */
     maxReviewerAnalystIterations: number;
-    /** Máximo de iterações Executor↔Reviewer antes de forçar continuação */
+    /** @deprecated Use maxExecutorRetries instead */
     maxExecutorRetries: number;
-    /** Máximo de subtasks por blueprint */
+    /** @deprecated Use maxSubtasksPerBlueprint instead */
     maxSubtasksPerBlueprint: number;
   };
 }
@@ -89,8 +96,22 @@ export const config: OracleConfig = {
     defaultUserModel: 'llama-3.3-70b',
   },
   pipeline: {
+    // ── Reviewer ↔ Analyst loop ──────────────────────────────────────────────
     maxReviewerAnalystIterations: 3,
+
+    // ── Executor retries per subtask ─────────────────────────────────────────
     maxExecutorRetries: 3,
+
+    // ── Subtask cap per blueprint ────────────────────────────────────────────
     maxSubtasksPerBlueprint: 8,
+
+    // ── Tool-call loop cap (Issue #11 — new) ─────────────────────────────────
+    maxToolCallIterations: 8,
+
+    // ── Swarm delegation depth cap (Issue #11 — new) ─────────────────────────
+    maxSwarmDelegationDepth: 3,
+
+    // ── Self-correction cap inside tool loop (Issue #11 — new) ───────────────
+    maxSelfCorrectionAttempts: 3,
   },
 };

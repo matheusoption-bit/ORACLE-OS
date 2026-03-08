@@ -1,36 +1,45 @@
 /**
  * ORACLE-OS Executor Node — Quadripartite Architecture
- * 
+ *
  * Stage 3: The Sandbox Worker
- * 
+ *
  * The ONLY node allowed to use the E2B Sandbox and MCP tools to write code,
  * install packages, and test. Executes the Reviewer's Execution Blueprint.
- * 
+ *
  * Outputs "Raw Executed Code" and test results as ExecutedCode.
- * 
+ *
  * Preserves all existing integrations:
  * - E2B Sandbox execution
  * - MCP tool calling
  * - Auto-correction patterns
  * - Frontend/Backend specialization routing
  * - Tag parsing (Lovable pattern)
+ *
+ * Issue #11: uses PipelineGuards for tool-call loop and self-correction caps.
+ * Issue #10: uses validateExecutionResult for output validation.
  */
 
 import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { createModel } from '../models/model-registry.js';
 import { config } from '../config.js';
-import {
-  OracleState,
+import type {
+  SupervisorState as OracleState,
   Subtask,
   ExecutedCode,
-  ExecutorResult,
+  ExecutionResult as ExecutorResult,
   TestResult,
   ExecutionError,
-} from '../state/oracle-state.js';
+} from '../state/schemas.js';
 import { getToolsForAgent } from '../tools/tool-registry.js';
 import { EXECUTOR_SYSTEM_PROMPT } from '../prompts/executor.prompt.js';
 import { executorLogger } from '../monitoring/logger.js';
+import { PipelineGuards } from '../pipeline/guards.js';
+import { validateExecutionResult } from '../pipeline/validators.js';
+import { guardReason, isValidationFailed } from '../pipeline/type-helpers.js';
+
+// ─── Pipeline guards (Issue #11) ─────────────────────────────────────────────
+const guards = new PipelineGuards(config.pipeline);
 
 // ─── Tag Parser (Lovable Pattern — preserved) ───────────────────────────────
 
@@ -162,13 +171,13 @@ function detectCorrectiveAction(
   return null;
 }
 
-// ─── Tool-calling loop with Auto-Correction (preserved) ─────────────────────
+// ─── Tool-calling loop with Auto-Correction (Issue #11: guarded) ─────────────
 
 export async function runToolLoop(
   systemPrompt: string,
   taskPrompt: string,
   tools: DynamicStructuredTool[],
-  maxIterations = 8,
+  maxIterations = guards.getConfig().maxToolCallIterations,
   shortTermMemory: string[] = []
 ): Promise<{
   output: string;
@@ -196,9 +205,17 @@ export async function runToolLoop(
   const filesModified: string[] = [];
   let finalResponseContent = '';
   let selfCorrectionAttempts = 0;
-  const MAX_SELF_CORRECTIONS = 3;
 
-  for (let i = 0; i < maxIterations; i++) {
+  const effectiveMaxIterations = Math.min(maxIterations, guards.getConfig().maxToolCallIterations);
+
+  for (let i = 0; i < effectiveMaxIterations; i++) {
+    // ── Issue #11: check tool-call loop guard ─────────────────────────────────
+    const loopDecision = guards.checkToolCallLoop(i);
+    if (!loopDecision.allowed) {
+      executorLogger.warn(`⚠️  [Executor/ToolLoop] ${guardReason(loopDecision)}`);
+      break;
+    }
+
     const response = await modelWithTools.invoke(messages) as AIMessage;
     messages.push(response);
 
@@ -216,7 +233,7 @@ export async function runToolLoop(
       };
     }
 
-    let loopOutput = typeof response.content === 'string' ? response.content : '';
+    const loopOutput = typeof response.content === 'string' ? response.content : '';
     finalResponseContent += loopOutput + '\n';
 
     for (const toolCall of toolCalls) {
@@ -240,7 +257,7 @@ export async function runToolLoop(
         const result = await tool.invoke(toolCall.args as Record<string, string>);
         const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
 
-        // Auto-Correction for shell_exec
+        // Auto-Correction for shell_exec (Issue #11: guarded by checkSelfCorrection)
         if (toolCall.name === 'shell_exec') {
           let parsed: { success?: boolean; error?: string; stderr?: string; command?: string } = {};
           try { parsed = JSON.parse(resultStr); } catch { /* not JSON */ }
@@ -248,12 +265,14 @@ export async function runToolLoop(
           const errorOutput = parsed.error || parsed.stderr || '';
           const originalCommand = (toolCall.args as Record<string, string>)['command'] ?? '';
 
-          if (!parsed.success && errorOutput && selfCorrectionAttempts < MAX_SELF_CORRECTIONS) {
+          // ── Issue #11: check self-correction guard ──────────────────────────
+          const correctionDecision = guards.checkSelfCorrection(selfCorrectionAttempts);
+          if (!parsed.success && errorOutput && correctionDecision.allowed) {
             const correction = detectCorrectiveAction(errorOutput, originalCommand);
 
             if (correction) {
               selfCorrectionAttempts++;
-              console.log(`🔧 Auto-correção [${selfCorrectionAttempts}/${MAX_SELF_CORRECTIONS}]: ${correction.description}`);
+              console.log(`🔧 Auto-correção [${selfCorrectionAttempts}/${guards.getConfig().maxSelfCorrectionAttempts}]: ${correction.description}`);
 
               messages.push(new ToolMessage({
                 tool_call_id: toolCall.id ?? '',
@@ -289,6 +308,9 @@ export async function runToolLoop(
               }
               continue;
             }
+          } else if (!correctionDecision.allowed && !parsed.success && errorOutput) {
+            // Guard triggered: log and skip further corrections
+            executorLogger.warn(`⚠️  [Executor/ToolLoop] ${guardReason(correctionDecision)}`);
           }
         }
 
@@ -342,7 +364,7 @@ Use as tags <oracle-thinking> e ao final <oracle-success> ou <oracle-error>.`;
     systemPrompt,
     taskPrompt,
     tools,
-    8,
+    guards.getConfig().maxToolCallIterations,
     shortTermMemory
   );
 
@@ -386,10 +408,13 @@ export { executorRouter };
 
 /**
  * executorNode — Nó LangGraph (Stage 3)
- * 
+ *
  * The ONLY node that uses E2B Sandbox and MCP tools.
  * Executes all subtasks from the Execution Blueprint sequentially.
  * Produces ExecutedCode output for the Synthesis node.
+ *
+ * Issue #11: executor retry guard applied per subtask.
+ * Issue #10: validateExecutionResult called for each subtask result.
  */
 export async function executorNode(
   state: OracleState
@@ -418,63 +443,113 @@ export async function executorNode(
   const allPackagesInstalled: string[] = [];
   const allExecutionErrors: ExecutionError[] = [];
   const memoryEntries: string[] = [];
-  let currentSubtask = state.currentSubtask;
+  const currentSubtask = state.currentSubtask;
 
   for (let i = currentSubtask; i < subtasks.length; i++) {
     const subtask = subtasks[i];
     const label = `${i + 1}/${subtasks.length} — ${subtask.title}`;
     executorLogger.info(`⚙️  [Executor] Executando subtask ${label}`);
 
-    try {
-      const result = await executeSubtask(subtask, [
-        ...(state.shortTermMemory ?? []),
-        ...memoryEntries,
-      ]);
+    // ── Issue #11: executor retry guard ──────────────────────────────────────
+    let attemptCount = 0;
+    let lastError: Error | null = null;
+    let executorResult: ExecutorResult | null = null;
 
-      const executorResult: ExecutorResult = {
-        subtaskId: result.subtaskId,
-        status: result.status,
-        output: result.output,
-        toolCallsExecuted: result.toolCallsExecuted,
-        filesModified: result.filesModified,
-        timestamp: result.timestamp,
-        parsedTags: result.parsedTags,
-        selfCorrectionAttempts: result.selfCorrectionAttempts,
-      };
+    while (true) {
+      const retryDecision = guards.checkExecutorRetry(attemptCount);
+      if (!retryDecision.allowed) {
+        executorLogger.warn(`⚠️  [Executor] ${guardReason(retryDecision)} for subtask "${subtask.title}".`);
+        break;
+      }
 
+      try {
+        const result = await executeSubtask(subtask, [
+          ...(state.shortTermMemory ?? []),
+          ...memoryEntries,
+        ]);
+
+        executorResult = {
+          subtaskId: result.subtaskId,
+          status: result.status,
+          output: result.output,
+          toolCallsExecuted: result.toolCallsExecuted,
+          filesModified: result.filesModified,
+          timestamp: result.timestamp,
+          parsedTags: result.parsedTags,
+          selfCorrectionAttempts: result.selfCorrectionAttempts,
+        };
+
+        // ── Issue #10: validate execution result ──────────────────────────────
+        const validation = validateExecutionResult(executorResult);
+        if (isValidationFailed(validation)) {
+          executorLogger.warn(`⚠️  [Executor] Result validation: ${validation.error.message}`);
+        } else if (validation.warnings.length > 0) {
+          validation.warnings.forEach((w) => executorLogger.warn(`⚠️  [Executor] ${w}`));
+        }
+
+        // If the subtask succeeded, break out of retry loop
+        if (result.status !== 'failed') {
+          break;
+        }
+
+        // Subtask failed — check if we should retry
+        lastError = new Error(result.output);
+        attemptCount++;
+
+        const nextRetryDecision = guards.checkExecutorRetry(attemptCount);
+        if (!nextRetryDecision.allowed) {
+          executorLogger.warn(`⚠️  [Executor] ${guardReason(nextRetryDecision)} for subtask "${subtask.title}".`);
+          break;
+        }
+
+        executorLogger.warn(`⚠️  [Executor] Subtask "${subtask.title}" failed (attempt ${attemptCount}/${guards.getConfig().maxExecutorRetries}). Retrying...`);
+
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        attemptCount++;
+        executorLogger.warn(`⚠️  [Executor] Subtask "${subtask.title}" threw (attempt ${attemptCount}): ${lastError.message}`);
+
+        const nextRetryDecision = guards.checkExecutorRetry(attemptCount);
+        if (!nextRetryDecision.allowed) {
+          break;
+        }
+      }
+    }
+
+    if (executorResult) {
       allResults[subtask.id] = executorResult;
-      allFilesModified.push(...result.filesModified);
+      allFilesModified.push(...executorResult.filesModified);
 
-      if (result.parsedTags?.thinking) {
-        console.log(`[Thinking...] ${result.parsedTags.thinking.substring(0, 100)}...`);
+      if (executorResult.parsedTags?.thinking) {
+        console.log(`[Thinking...] ${executorResult.parsedTags.thinking.substring(0, 100)}...`);
       }
 
-      if (result.selfCorrectionAttempts && result.selfCorrectionAttempts > 0) {
-        console.log(`🔧 Auto-correções: ${result.selfCorrectionAttempts}`);
+      if (executorResult.selfCorrectionAttempts && executorResult.selfCorrectionAttempts > 0) {
+        console.log(`🔧 Auto-correções: ${executorResult.selfCorrectionAttempts}`);
       }
 
-      const memoryEntry = `[Executor/${subtask.assignedAgent}] Subtask "${subtask.title}" → ${result.status}. ` +
-        `Tools: ${result.toolCallsExecuted.join(', ')}. Files: ${result.filesModified.join(', ')}.` +
-        (result.selfCorrectionAttempts ? ` Auto-correções: ${result.selfCorrectionAttempts}.` : '');
+      const memoryEntry = `[Executor/${subtask.assignedAgent}] Subtask "${subtask.title}" → ${executorResult.status}. ` +
+        `Tools: ${executorResult.toolCallsExecuted.join(', ')}. Files: ${executorResult.filesModified.join(', ')}.` +
+        (executorResult.selfCorrectionAttempts ? ` Auto-correções: ${executorResult.selfCorrectionAttempts}.` : '') +
+        (attemptCount > 1 ? ` Retry attempts: ${attemptCount}.` : '');
       memoryEntries.push(memoryEntry);
 
-      // Track failed subtasks
-      if (result.status === 'failed') {
+      if (executorResult.status === 'failed') {
         allExecutionErrors.push({
           subtaskId: subtask.id,
-          error: result.output,
-          recoverable: true,
-          attemptCount: 1,
+          error: executorResult.output,
+          recoverable: false,
+          attemptCount,
         });
       }
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      console.error(`❌ [Executor] Falhou em ${subtask.id}:`, error.message);
+    } else {
+      const errMsg = lastError?.message ?? 'Unknown error after all retries';
+      console.error(`❌ [Executor] Falhou em ${subtask.id} após ${attemptCount} tentativas:`, errMsg);
 
       allResults[subtask.id] = {
         subtaskId: subtask.id,
         status: 'failed',
-        output: error.message,
+        output: errMsg,
         toolCallsExecuted: [],
         filesModified: [],
         timestamp: new Date().toISOString(),
@@ -482,16 +557,14 @@ export async function executorNode(
 
       allExecutionErrors.push({
         subtaskId: subtask.id,
-        error: error.message,
+        error: errMsg,
         recoverable: false,
-        attemptCount: 1,
+        attemptCount,
       });
 
-      const memoryEntry = `[Executor] Subtask "${subtask.title}" → FAILED: ${error.message}`;
+      const memoryEntry = `[Executor] Subtask "${subtask.title}" → FAILED after ${attemptCount} attempts: ${errMsg}`;
       memoryEntries.push(memoryEntry);
     }
-
-    currentSubtask = i + 1;
   }
 
   const executedCode: ExecutedCode = {

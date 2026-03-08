@@ -1,28 +1,34 @@
 /**
  * ORACLE-OS Main State Graph — Quadripartite Architecture
- * 
+ *
  * 4-Stage Pipeline: Analyst → Reviewer (Architect) → Executor → Synthesis
- * 
+ *
  * Flow:
  *   START → analyst → reviewer → (approved?) → executor → synthesis → END
  *                        ↓ (needs_revision)
- *                      analyst (max 3 iterations)
+ *                      analyst  ← guarded by PipelineGuards.checkReviewerAnalyst()
  *                        ↓ (rejected)
  *                       END
- * 
+ *
  * Executor sub-routing preserved:
  *   executor_router → frontend_executor | backend_executor | executor (generic)
- * 
- * Guards:
- *   - Max 3 Reviewer↔Analyst iterations before forced approval
- *   - Max 3 Executor retries before TODO comment and move on
- *   - CostTracker integrated for real token tracking per agent
- *   - shortTermMemory for contextual awareness between agents
- *   - State events emitted for dashboard/monitoring
+ *
+ * Guards (Issue #11):
+ *   - PipelineGuards.checkReviewerAnalyst()  — max Reviewer↔Analyst iterations
+ *   - PipelineGuards.checkExecutorRetry()    — max executor retries per subtask
+ *   - PipelineGuards.checkToolCallLoop()     — max tool-call loop iterations
+ *   - PipelineGuards.checkSwarmDelegation()  — max swarm delegation depth
+ *   - All limits are configurable via config.pipeline
+ *
+ * State Contracts (Issue #10):
+ *   - validatePipelineState() called at graph entry
+ *   - validateReviewerInput() called before Reviewer node
+ *   - validateExecutorInput() called before Executor node
+ *   - validateSynthesisInput() called before Synthesis node
  */
 
 import { StateGraph, END, START } from '@langchain/langgraph';
-import { OracleState } from '../state/oracle-state.js';
+import type { SupervisorState } from '../state/schemas.js';
 import { analystNode } from '../agents/analyst.js';
 import { reviewerNode } from '../agents/reviewer.js';
 import { executorNode, executorAgent, executorRouter } from '../agents/executor.js';
@@ -32,9 +38,18 @@ import { synthesisNode, costTracker } from '../agents/synthesis.js';
 import { startTask } from '../monitoring/metrics.js';
 import { systemLogger } from '../monitoring/logger.js';
 import { config } from '../config.js';
+import { PipelineGuards } from '../pipeline/guards.js';
+import {
+  validateReviewerInput,
+  validateExecutorInput,
+  validateSynthesisInput,
+} from '../pipeline/validators.js';
 
 // ─── Export costTracker for external use (e.g., OracleBridge) ────────────────
 export { costTracker };
+
+// ─── Pipeline guards singleton (initialised from config.pipeline) ─────────────
+const guards = new PipelineGuards(config.pipeline);
 
 // ─── Helper: estimate tokens from string length (fallback) ──────────────────
 function estimateTokens(text: string): number {
@@ -43,15 +58,12 @@ function estimateTokens(text: string): number {
 
 // ─── Edge Types ──────────────────────────────────────────────────────────────
 
-type AnalystEdge = 'reviewer';
 type ReviewerEdge = 'analyst' | 'executor' | typeof END;
-type ExecutorEdge = 'synthesis';
-type SynthesisEdge = typeof END;
 
 // ─── Graph Creation ──────────────────────────────────────────────────────────
 
 export function createOracleGraph() {
-  const workflow = new StateGraph<OracleState>({
+  const workflow = new StateGraph<SupervisorState>({
     channels: {
       task: null,
       currentStage: null,
@@ -73,7 +85,7 @@ export function createOracleGraph() {
   // ══════════════════════════════════════════════════════════════════════════
   // STAGE 1: ANALYST (Context & RAG)
   // ══════════════════════════════════════════════════════════════════════════
-  .addNode('analyst', async (state: OracleState) => {
+  .addNode('analyst', async (state: SupervisorState) => {
     const taskId = Math.random().toString(36).substr(2, 9);
 
     // Start task metrics on first entry
@@ -101,8 +113,21 @@ export function createOracleGraph() {
   // ══════════════════════════════════════════════════════════════════════════
   // STAGE 2: REVIEWER (Architecture & Security — Red Team)
   // ══════════════════════════════════════════════════════════════════════════
-  .addNode('reviewer', async (state: OracleState) => {
-    systemLogger.info(`🏗️  [Pipeline] Stage 2: Reviewer — Revisão arquitetural (iteração ${state.iterationCount + 1}/${config.pipeline.maxReviewerAnalystIterations})`);
+  .addNode('reviewer', async (state: SupervisorState) => {
+    // ── Issue #10: validate Reviewer inputs ──────────────────────────────────
+    const inputValidation = validateReviewerInput(state);
+    if (!inputValidation.valid) {
+      systemLogger.warn(
+        `⚠️  [Pipeline/Reviewer] Input validation failed: ${inputValidation.error.message}. ` +
+        `Proceeding with potentially incomplete context.`
+      );
+    }
+    if (inputValidation.valid && inputValidation.warnings.length > 0) {
+      inputValidation.warnings.forEach((w) => systemLogger.warn(`⚠️  [Pipeline/Reviewer] ${w}`));
+    }
+
+    const iterLabel = `${state.iterationCount + 1}/${guards.getConfig().maxReviewerAnalystIterations}`;
+    systemLogger.info(`🏗️  [Pipeline] Stage 2: Reviewer — Revisão arquitetural (iteração ${iterLabel})`);
 
     const result = await reviewerNode(state);
 
@@ -122,7 +147,16 @@ export function createOracleGraph() {
   // ══════════════════════════════════════════════════════════════════════════
   // STAGE 3: EXECUTOR (The Sandbox Worker — E2B + MCP)
   // ══════════════════════════════════════════════════════════════════════════
-  .addNode('executor', async (state: OracleState) => {
+  .addNode('executor', async (state: SupervisorState) => {
+    // ── Issue #10: validate Executor inputs ──────────────────────────────────
+    const inputValidation = validateExecutorInput(state);
+    if (!inputValidation.valid) {
+      systemLogger.warn(
+        `⚠️  [Pipeline/Executor] Input validation failed: ${inputValidation.error.message}. ` +
+        `Proceeding with available blueprint.`
+      );
+    }
+
     systemLogger.info('⚙️  [Pipeline] Stage 3: Executor — Execução no E2B Sandbox');
 
     const result = await executorNode(state);
@@ -141,7 +175,7 @@ export function createOracleGraph() {
   })
 
   // ── Specialized Executor sub-nodes (preserved from Sprint 10) ─────────
-  .addNode('frontend_executor', async (state: OracleState) => {
+  .addNode('frontend_executor', async (state: SupervisorState) => {
     const subtask = state.subtasks[state.currentSubtask];
     const label = subtask
       ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}`
@@ -182,7 +216,7 @@ export function createOracleGraph() {
     }
   })
 
-  .addNode('backend_executor', async (state: OracleState) => {
+  .addNode('backend_executor', async (state: SupervisorState) => {
     const subtask = state.subtasks[state.currentSubtask];
     const label = subtask
       ? `${state.currentSubtask + 1}/${state.subtasks.length} — ${subtask.title}`
@@ -226,7 +260,13 @@ export function createOracleGraph() {
   // ══════════════════════════════════════════════════════════════════════════
   // STAGE 4: SYNTHESIS (Documentation & Integration)
   // ══════════════════════════════════════════════════════════════════════════
-  .addNode('synthesis', async (state: OracleState) => {
+  .addNode('synthesis', async (state: SupervisorState) => {
+    // ── Issue #10: validate Synthesis inputs ─────────────────────────────────
+    const inputValidation = validateSynthesisInput(state);
+    if (inputValidation.valid && inputValidation.warnings.length > 0) {
+      inputValidation.warnings.forEach((w) => systemLogger.warn(`⚠️  [Pipeline/Synthesis] ${w}`));
+    }
+
     systemLogger.info('📝 [Pipeline] Stage 4: Synthesis — Documentação e integração final');
     return synthesisNode(state);
   })
@@ -241,7 +281,7 @@ export function createOracleGraph() {
   // analyst → reviewer (always goes to review after analysis)
   .addEdge('analyst', 'reviewer')
 
-  // reviewer → conditional routing
+  // reviewer → conditional routing (Issue #11: uses PipelineGuards)
   .addConditionalEdges(
     'reviewer',
     (state): ReviewerEdge => {
@@ -256,10 +296,10 @@ export function createOracleGraph() {
         return 'executor';
       }
 
-      // NEEDS_REVISION → back to analyst (with iteration guard)
-      if (state.iterationCount >= config.pipeline.maxReviewerAnalystIterations) {
-        // Guard: max iterations exceeded, force to executor
-        systemLogger.warn('⚠️  [Pipeline] Max iterations exceeded — forcing to executor.');
+      // NEEDS_REVISION → check guard before looping back to analyst
+      const guardDecision = guards.checkReviewerAnalyst(state.iterationCount);
+      if (!guardDecision.allowed) {
+        systemLogger.warn(`⚠️  [Pipeline] ${guardDecision.reason}`);
         return 'executor';
       }
 

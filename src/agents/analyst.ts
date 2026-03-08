@@ -1,23 +1,26 @@
 /**
  * ORACLE-OS Analyst Node — Quadripartite Architecture
- * 
+ *
  * Stage 1: Context & RAG
- * 
+ *
  * Ingests the user task, uses ChromaDB/Docling to read codebase context,
  * and defines requirements. Outputs a "Context Document".
- * 
+ *
  * This node is the entry point of the Quadripartite pipeline.
  * It NEVER writes code — only analyzes and produces structured context.
+ *
+ * Issue #10: validates output with AnalystStateSchema before returning.
  */
 
 import { z } from 'zod';
 import { HumanMessage } from '@langchain/core/messages';
 import { createModel } from '../models/model-registry.js';
 import { config } from '../config.js';
-import { OracleState, ContextDocument } from '../state/oracle-state.js';
+import type { SupervisorState as OracleState, AnalystState as ContextDocument } from '../state/schemas.js';
 import { retrieveRelevantSkills, formatSkillsAsContext } from '../rag/rag-pipeline.js';
 import { ANALYST_SYSTEM_PROMPT } from '../prompts/analyst.prompt.js';
 import { PromptEnhancer } from '../prompts/enhancer.js';
+import { validateAnalystOutput } from '../pipeline/validators.js';
 
 // ─── Zod Schema for Analyst Output ──────────────────────────────────────────
 
@@ -38,9 +41,11 @@ const enhancer = new PromptEnhancer();
 
 /**
  * analystNode — Nó LangGraph (Stage 1)
- * 
+ *
  * Recebe o estado compartilhado, analisa a tarefa com contexto RAG,
  * e retorna um Context Document estruturado para o Reviewer.
+ *
+ * Issue #10: validates the produced ContextDocument before returning.
  */
 export async function analystNode(
   state: OracleState
@@ -114,6 +119,16 @@ Analise a tarefa e retorne um Context Document JSON completo com todos os campos
       initialRisks: result.initialRisks,
       timestamp: new Date().toISOString(),
     };
+
+    // ── Issue #10: validate output before storing ─────────────────────────────
+    const validation = validateAnalystOutput(contextDocument);
+    if (!validation.valid) {
+      // validation.valid === false, so .error is safe to access
+      const errMsg = (validation as { valid: false; error: { message: string }; warnings: string[] }).error.message;
+      console.warn(`⚠️  [Analyst] Output validation warning: ${errMsg}`);
+    } else if (validation.warnings.length > 0) {
+      validation.warnings.forEach((w) => console.warn(`⚠️  [Analyst] ${w}`));
+    }
 
     // Memória de curto prazo
     const memoryEntry = `[Analyst] Analisou tarefa: "${result.taskSummary.substring(0, 100)}". ` +

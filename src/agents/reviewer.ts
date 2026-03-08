@@ -1,28 +1,33 @@
 /**
  * ORACLE-OS Reviewer Node (Architect) — Quadripartite Architecture
- * 
+ *
  * Stage 2: Architecture & Security Review
- * 
+ *
  * Acts as a Red Team. Takes the Analyst's Context Document and criticizes it
  * for architectural flaws, security risks, or redundancy BEFORE any code is written.
- * 
+ *
  * Outputs:
  *   - 'approved' → Execution Blueprint with decomposed subtasks → goes to Executor
- *   - 'needs_revision' → Sends feedback back to Analyst (max 3 iterations)
+ *   - 'needs_revision' → Sends feedback back to Analyst (guarded by PipelineGuards)
  *   - 'rejected' → Hard stop, task is rejected
+ *
+ * Issue #10: validates inputs and outputs with Zod schemas.
+ * Issue #11: uses PipelineGuards for iteration limit enforcement.
  */
 
 import { z } from 'zod';
 import { HumanMessage } from '@langchain/core/messages';
 import { createModel } from '../models/model-registry.js';
 import { config } from '../config.js';
-import {
-  OracleState,
-  Subtask,
-  ExecutionBlueprint,
-} from '../state/oracle-state.js';
+import type { SupervisorState, Subtask, ExecutionBlueprint } from '../state/schemas.js';
 import { REVIEWER_SYSTEM_PROMPT } from '../prompts/reviewer.prompt.js';
 import { reviewerLogger, systemLogger } from '../monitoring/logger.js';
+import { PipelineGuards } from '../pipeline/guards.js';
+import { validateReviewerOutput } from '../pipeline/validators.js';
+import { guardReason, isValidationFailed } from '../pipeline/type-helpers.js';
+
+// ─── Pipeline guards (Issue #11) ─────────────────────────────────────────────
+const guards = new PipelineGuards(config.pipeline);
 
 // ─── Zod Schemas ─────────────────────────────────────────────────────────────
 
@@ -56,21 +61,25 @@ export type BlueprintOutput = z.infer<typeof BlueprintSchema>;
 
 /**
  * reviewerNode — Nó LangGraph (Stage 2)
- * 
+ *
  * Recebe o Context Document do Analyst, faz revisão arquitetural e de segurança,
  * e produz um Execution Blueprint ou envia feedback para re-análise.
+ *
+ * Issue #11: uses PipelineGuards.checkReviewerAnalyst() to enforce the
+ * maximum number of Reviewer ↔ Analyst cycles.
  */
 export async function reviewerNode(
-  state: OracleState
-): Promise<Partial<OracleState>> {
+  state: SupervisorState
+): Promise<Partial<SupervisorState>> {
   const iteration = state.iterationCount + 1;
-  const maxIterations = config.pipeline.maxReviewerAnalystIterations;
+  const maxIterations = guards.getConfig().maxReviewerAnalystIterations;
 
   reviewerLogger.info(`🏗️  [Reviewer] Revisão arquitetural — tentativa ${iteration}/${maxIterations}...`);
 
-  // Guard: se atingiu máximo de iterações, forçar aprovação
-  if (iteration > maxIterations) {
-    reviewerLogger.warn(`⚠️  [Reviewer] Máximo de iterações atingido (${maxIterations}) — forçando aprovação.`);
+  // ── Issue #11: guard check — force approval if limit exceeded ─────────────
+  const guardDecision = guards.checkReviewerAnalyst(state.iterationCount);
+  if (!guardDecision.allowed) {
+    reviewerLogger.warn(`⚠️  [Reviewer] ${guardReason(guardDecision)}`);
     return buildForceApproveResult(state);
   }
 
@@ -81,13 +90,11 @@ export async function reviewerNode(
 
   const structuredModel = model.withStructuredOutput(BlueprintSchema);
 
-  // Montar o prompt com o Context Document do Analyst
   const contextDoc = state.contextDocument;
   const contextDocStr = contextDoc
     ? JSON.stringify(contextDoc, null, 2)
     : '(Context Document não disponível — Analyst pode ter falhado)';
 
-  // Memória de curto prazo
   const memoryBlock = (state.shortTermMemory ?? []).length > 0
     ? `\n<short_term_memory>\nHistórico de decisões e resultados neste ciclo:\n${state.shortTermMemory.map((m, i) => `[${i + 1}] ${m}`).join('\n')}\n</short_term_memory>\n`
     : '';
@@ -125,21 +132,22 @@ Retorne o Execution Blueprint JSON completo.`;
 
     const rawStatus = (result as any).status ?? (result as any).reviewStatus ?? 'needs_revision';
     let finalStatus = rawStatus as ExecutionBlueprint['status'];
-    let feedbackToAnalyst = (result as any).feedbackToAnalyst;
-    let revisionNotes = (result as any).revisionNotes ?? (result as any).architecturalNotes ?? '';
-    const securityRisks = Array.isArray((result as any).securityRisks) ? (result as any).securityRisks : [];
-    const redundanciesFound = Array.isArray((result as any).redundanciesFound) ? (result as any).redundanciesFound : [];
+    let feedbackToAnalyst = (result as any).feedbackToAnalyst as string | undefined;
+    let revisionNotes: string = (result as any).revisionNotes ?? (result as any).architecturalNotes ?? '';
+    const securityRisks: string[] = Array.isArray((result as any).securityRisks) ? (result as any).securityRisks : [];
+    const redundanciesFound: string[] = Array.isArray((result as any).redundanciesFound) ? (result as any).redundanciesFound : [];
 
-    // Guard: se rejeita ou pede revisão mas já atingiu limite, forçar aprovação
-    if ((finalStatus === 'rejected' || finalStatus === 'needs_revision') && iteration >= maxIterations) {
-      reviewerLogger.warn(`⚠️  [Reviewer] Limite de iterações atingido. Forçando aprovação com warnings.`);
+    // ── Issue #11: if still requesting revision at last allowed iteration, force approve ──
+    const nextGuardDecision = guards.checkReviewerAnalyst(iteration);
+    if ((finalStatus === 'rejected' || finalStatus === 'needs_revision') && !nextGuardDecision.allowed) {
+      reviewerLogger.warn(`⚠️  [Reviewer] ${guardReason(nextGuardDecision)}`);
       finalStatus = 'approved';
       feedbackToAnalyst = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] ${feedbackToAnalyst ?? ''}`.trim();
-      revisionNotes = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] ${revisionNotes ?? ''}`.trim();
+      revisionNotes = `[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] ${revisionNotes}`.trim();
     }
 
     // Mapear subtasks com retrocompatibilidade
-    const subtasks: Subtask[] = ((result as any).subtasks || []).map((s: any) => ({
+    const rawSubtasks: Subtask[] = ((result as any).subtasks || []).map((s: any) => ({
       ...s,
       dependencies: s.dependencies ?? s.dependsOn ?? [],
       dependsOn: s.dependsOn ?? [],
@@ -148,8 +156,14 @@ Retorne o Execution Blueprint JSON completo.`;
         : 'geral',
     }));
 
-    // Limitar número de subtasks
-    const limitedSubtasks = subtasks.slice(0, config.pipeline.maxSubtasksPerBlueprint);
+    // ── Issue #11: clamp subtask count via guard ───────────────────────────────
+    const limitedSubtasks = guards.clampSubtasks(rawSubtasks);
+    if (limitedSubtasks.length < rawSubtasks.length) {
+      reviewerLogger.warn(
+        `⚠️  [Reviewer] Blueprint had ${rawSubtasks.length} subtasks; clamped to ${limitedSubtasks.length} ` +
+        `(maxSubtasksPerBlueprint=${guards.getConfig().maxSubtasksPerBlueprint}).`
+      );
+    }
 
     const blueprint: ExecutionBlueprint = {
       status: finalStatus,
@@ -162,9 +176,17 @@ Retorne o Execution Blueprint JSON completo.`;
       timestamp: new Date().toISOString(),
     };
 
+    // ── Issue #10: validate the produced blueprint ────────────────────────────
+    const outputValidation = validateReviewerOutput(blueprint);
+    if (isValidationFailed(outputValidation)) {
+      reviewerLogger.warn(`⚠️  [Reviewer] Output validation warning: ${outputValidation.error.message}`);
+    } else if (outputValidation.warnings.length > 0) {
+      outputValidation.warnings.forEach((w) => reviewerLogger.warn(`⚠️  [Reviewer] ${w}`));
+    }
+
     // Determinar próximo estágio
-    let nextStage: OracleState['currentStage'];
-    let reviewStatus: OracleState['reviewStatus'];
+    let nextStage: SupervisorState['currentStage'];
+    let reviewStatus: SupervisorState['reviewStatus'];
 
     if (finalStatus === 'approved') {
       nextStage = 'executor';
@@ -180,7 +202,6 @@ Retorne o Execution Blueprint JSON completo.`;
       reviewerLogger.error(`❌ [Reviewer] Blueprint REJEITADO.`);
     }
 
-    // Memória de curto prazo
     const memoryEntry = `[Reviewer] Tentativa ${iteration}/${maxIterations} → ${finalStatus}. ` +
       `Subtasks: ${limitedSubtasks.length}. ` +
       `Riscos de segurança: ${securityRisks.length}. ` +
@@ -201,7 +222,10 @@ Retorne o Execution Blueprint JSON completo.`;
     const error = err instanceof Error ? err : new Error(String(err));
     console.error('❌ [Reviewer] Erro na revisão:', error.message);
 
-    if (iteration >= maxIterations) {
+    // ── Issue #11: if at iteration limit, force approve instead of looping ────
+    const retryDecision = guards.checkReviewerAnalyst(iteration);
+    if (!retryDecision.allowed) {
+      reviewerLogger.warn(`⚠️  [Reviewer] ${guardReason(retryDecision)}`);
       return buildForceApproveResult(state);
     }
 
@@ -220,13 +244,11 @@ Retorne o Execution Blueprint JSON completo.`;
 
 // ─── Force Approve Helper ────────────────────────────────────────────────────
 
-function buildForceApproveResult(state: OracleState): Partial<OracleState> {
+function buildForceApproveResult(state: SupervisorState): Partial<SupervisorState> {
   systemLogger.warn('⚠️  [Reviewer] Forçando aprovação — máximo de iterações excedido.');
 
-  // Se já temos um blueprint parcial, usar suas subtasks
   const existingSubtasks = state.executionBlueprint?.subtasks ?? state.subtasks ?? [];
 
-  // Se não temos subtasks, criar uma genérica baseada na task
   const subtasks: Subtask[] = existingSubtasks.length > 0
     ? existingSubtasks
     : [{
@@ -247,7 +269,7 @@ function buildForceApproveResult(state: OracleState): Partial<OracleState> {
     status: 'approved',
     subtasks,
     executionPlan: 'sequential',
-    architecturalNotes: '[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] Limite de iterações atingido. Prosseguindo com blueprint mínimo.',
+    architecturalNotes: '[FORCED APPROVAL - MAX ITERATIONS EXCEEDED] Limite de iterações atingido.',
     securityRisks: [],
     redundanciesFound: [],
     feedbackToAnalyst: undefined,
@@ -270,6 +292,6 @@ function buildForceApproveResult(state: OracleState): Partial<OracleState> {
 
 // ─── Legacy export for backward compatibility ────────────────────────────────
 
-export async function reviewerAgent(state: OracleState): Promise<Partial<OracleState>> {
+export async function reviewerAgent(state: SupervisorState): Promise<Partial<SupervisorState>> {
   return reviewerNode(state);
 }
