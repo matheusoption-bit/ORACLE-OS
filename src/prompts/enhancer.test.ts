@@ -20,6 +20,7 @@ vi.mock('../config.js', () => ({
   },
   config: {
     agents: {
+      analyst: { modelId: 'claude-3-5-sonnet', temperature: 0.5 },
       planner: { modelId: 'claude-3-5-sonnet', temperature: 0.7 },
     },
   },
